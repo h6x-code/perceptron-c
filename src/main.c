@@ -83,13 +83,9 @@ static void* train_slice_run(void *arg) {
     assert(s->end   >= s->start);
     assert(s->t0    >= 0);
 
-    // shard must fit within the current batch [t0, t0+B)
-    // All indices s->t0 + u must be valid offsets into idx_train
-    // (idx_train holds indices in [0, n_train) ).
-    // We can only check the mapped sample indices against dataset size here:
     for (int u = s->start; u < s->end; ++u) {
         int i = s->idx[s->t0 + u];
-        assert(i >= 0 && i < s->d->n);  // dataset row must exist
+        assert(i >= 0 && i < s->d->n);
     }
     // --- end ASSERTS ---
 
@@ -100,15 +96,12 @@ static void* train_slice_run(void *arg) {
     for (int u = s->start; u < s->end; ++u) {
         int i = s->idx[s->t0 + u];
         const float *row = &s->d->X[(size_t)i * (size_t)s->d->d];
-
-        // copy features to thread-local input tensor
         for (int j = 0; j < s->m->d_in; ++j) S->x.data[j] = row[j];
         int y = s->d->y ? s->d->y[i] : -1;
 
         mlp_forward_logits_ws(s->m, &S->x, &S->logits, &S->ws);
         float L = cross_entropy_from_logits(&S->logits, y);
         S->loss += L;
-
         if (argmax(&S->logits) == y) S->correct++;
 
         mlp_backward_from_logits_ws(s->m, y, &S->ws,
@@ -335,6 +328,19 @@ int main(int argc, char **argv) {
             fprintf(stderr, "mlp_init failed\n"); dataset_free(&d); return 1;
         }
 
+        // Validation workspace (used for single-threaded val forward)
+        MLPWS val_ws = {0};
+        if (n_val > 0) {
+            if (mlpws_init(&val_ws, &m) != 0) {
+                fprintf(stderr, "[train] failed to init validation workspace\n");
+                // make sure to clean up and exit similarly to your other early-returns:
+                // e.g., dataset_free(&d); mlp_free(&m); return 1;
+                dataset_free(&d);
+                mlp_free(&m);
+                return 1;
+            }
+        }
+
         // Allocate per-thread slots
         int T = threads;
         ThreadSlot *th = (ThreadSlot*)calloc((size_t)T, sizeof(ThreadSlot));
@@ -390,7 +396,10 @@ int main(int argc, char **argv) {
             // train loop (multi-threading)
             for (int t0 = 0; t0 < n_train; t0 += batch) {
                 int B = batch; if (t0 + B > n_train) B = n_train - t0;
-                int TT = T; if (TT > B) TT = B;
+                int TT = T;
+                if (TT > B) TT = B;
+                if (TT < 1) TT = 1;
+                assert(TT >= 1 && TT <= T);
 
                 // partition [0,B) → TT slices
                 int base = B / TT, rem = B % TT, cur = 0;
@@ -404,37 +413,25 @@ int main(int argc, char **argv) {
                 }
                 for (int t = 0; t < TT; ++t) pthread_join(pth[t], NULL);
 
-                // Reduce per-thread grads deterministically with Kahan compensation in double,
-                // and write averaged grads directly into dW/db.
-                Tensor *dW = NULL, *db = NULL;
-                alloc_param_like(&m, &dW, &db);
-
+                // Deterministic Kahan reduction in double; write averaged grads directly
+                Tensor *dW = NULL, *db = NULL; alloc_param_like(&m, &dW, &db);
                 const float invB = 1.0f / (float)B;
-
                 for (int l = 0; l < m.L; ++l) {
                     const int nW = m.W[l].rows * m.W[l].cols;
                     const int nb = m.b[l].cols;
-
-                    // Weights: fixed thread order [0..TT), Kahan in double
                     for (int i = 0; i < nW; ++i) {
                         double sum = 0.0, c = 0.0;
                         for (int t = 0; t < TT; ++t) {
                             double y = (double)th[t].dW_local[l].data[i] - c;
-                            double tmp = sum + y;
-                            c = (tmp - sum) - y;
-                            sum = tmp;
+                            double tmp = sum + y; c = (tmp - sum) - y; sum = tmp;
                         }
                         dW[l].data[i] = (float)(sum * (double)invB);
                     }
-
-                    // Biases: fixed thread order, Kahan in double
                     for (int j = 0; j < nb; ++j) {
                         double sum = 0.0, c = 0.0;
                         for (int t = 0; t < TT; ++t) {
                             double y = (double)th[t].db_local[l].data[j] - c;
-                            double tmp = sum + y;
-                            c = (tmp - sum) - y;
-                            sum = tmp;
+                            double tmp = sum + y; c = (tmp - sum) - y; sum = tmp;
                         }
                         db[l].data[j] = (float)(sum * (double)invB);
                     }
@@ -442,9 +439,9 @@ int main(int argc, char **argv) {
 
                 // one optimizer step using averaged grads
                 if (use_momentum) sgd_momentum_step(&optm, m.W, m.b, dW, db, lr);
-                else              sgd_step_params  (m.W, m.b, dW, db, m.L, lr);
+                else sgd_step_params  (m.W, m.b, dW, db, m.L, lr);
+                free_param_stack(dW, db, m.L);  // this frees the temporary reduction buffers only
 
-                free_param_stack(dW, db, m.L);
 
                 // batch stats
                 int corr = 0; float lsum = 0.0f;
@@ -464,7 +461,7 @@ int main(int argc, char **argv) {
                     for (int j = 0; j < d.d; ++j) x.data[j] = row[j];
 
                     int y = d.y[i];
-                    mlp_forward_logits(&m, &x, &logits);
+                    mlp_forward_logits_ws(&m, &x, &logits, &val_ws);
                     if (argmax(&logits) == y) correct_val++;
                 }
             }
@@ -472,6 +469,7 @@ int main(int argc, char **argv) {
             double e_s = (now_ms() - e0) / 1000.0;
             float acc_tr = (float)correct_train / (float)n_train;
             float acc_va = (n_val>0) ? ((float)correct_val / (float)n_val) : NAN;
+            mlpws_free(&val_ws);
 
             // Choose the metric: prefer validation if present
             float metric = (n_val > 0) ? acc_va : acc_tr;
@@ -536,19 +534,25 @@ int main(int argc, char **argv) {
         for (int l = 0; l < m.L; ++l) { tensor_free(&db[l]); tensor_free(&dW[l]); }
         free(db);
         free(dW);
+        if (n_val > 0) { mlpws_free(&val_ws); }
         mlp_free(&m);
         if (use_momentum) sgd_momentum_free(&optm);
         if (bestW) { free_params(bestW, bestB, m.L); }
 
         // Free multithreading
         for (int t = 0; t < T; ++t) {
-            free_param_stack(th[t].dW_local, th[t].db_local, m.L);
+            for (int l = 0; l < m.L; ++l) {
+                tensor_free(&th[t].dW_local[l]);
+                tensor_free(&th[t].db_local[l]);
+            }
+            free(th[t].dW_local);  th[t].dW_local = NULL;
+            free(th[t].db_local);  th[t].db_local = NULL;
+
             tensor_free(&th[t].logits);
             tensor_free(&th[t].x);
             mlpws_free(&th[t].ws);
         }
         free(th);
-
 
         // free indices + dataset
         free(idx_all);
