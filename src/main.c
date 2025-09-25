@@ -106,6 +106,8 @@ int main(int argc, char **argv) {
         const char *mnist_labels = NULL;
         int limit = 0;
         const char *norm = "minmax"; // default
+        int batch = 32; // mini-batch size
+        float momentum = 0.0f;  // 0 = vanilla SGD
 
         for (int a = 2; a < argc; ++a) {
             if (!strcmp(argv[a], "--epochs") && a+1 < argc) { epochs = atoi(argv[++a]); }
@@ -121,6 +123,8 @@ int main(int argc, char **argv) {
             else if (!strcmp(argv[a], "--mnist-labels") && a+1 < argc) { mnist_labels = argv[++a]; }
             else if (!strcmp(argv[a], "--limit") && a+1 < argc) { limit = atoi(argv[++a]); }
             else if (!strcmp(argv[a], "--norm") && a+1 < argc) { norm = argv[++a]; }
+            else if (!strcmp(argv[a], "--batch") && a+1 < argc)    { batch = atoi(argv[++a]); }
+            else if (!strcmp(argv[a], "--momentum") && a+1 < argc) { momentum = (float)atof(argv[++a]); }
             else if (!strcmp(argv[a], "--help")) { usage(); return 0; }
         }
         if (units_cnt != layers_hidden) { fprintf(stderr, "units count (%d) must match --layers (%d)\n", units_cnt, layers_hidden); return 1; }
@@ -128,7 +132,7 @@ int main(int argc, char **argv) {
 
         printf("[train] ds=%s layers=%d units=", dataset, layers_hidden);
         for (int i=0;i<units_cnt;i++) printf("%s%d", (i?",":""), units_arr[i]);
-        printf(" epochs=%d lr=%.4f seed=%u val=%.2f\n", epochs, lr, seed, val_frac);
+        printf(" epochs=%d lr=%.4f seed=%u val=%.2f batch=%d mom=%.2f\n", epochs, lr, seed, val_frac, batch, momentum);
 
         // Dataset + fixed split
         Dataset d = {0};
@@ -184,6 +188,12 @@ int main(int argc, char **argv) {
         Tensor x = tensor_alloc(1, m.d_in);
         Tensor logits = tensor_alloc(1, m.d_out);
 
+        SGD_Momentum optm = {0};
+        int use_momentum = (momentum > 0.0f);
+        if (use_momentum) {
+            if (sgd_momentum_init(&optm, m.L, m.W, m.b, momentum) != 0) {
+                fprintf(stderr, "momentum init failed\n"); /* free & exit */ }
+        }
 
         double t0 = now_ms();
         for (int e = 1; e <= epochs; ++e) {
@@ -195,23 +205,45 @@ int main(int argc, char **argv) {
             int correct_train = 0;
             float loss_sum = 0.0f;
 
-            // train loop
-            for (int t = 0; t < n_train; ++t) {
-                int i = idx_train[t];
-                // Copy features of sample i into x (1 × d.d)
-                const float *row = &d.X[(size_t)i * (size_t)d.d];
-                for (int j = 0; j < d.d; ++j) x.data[j] = row[j];
+            // train loop (mini-batches)
+            for (int t0 = 0; t0 < n_train; t0 += batch) {
+                int B = batch;
+                if (t0 + B > n_train) B = n_train - t0;
 
-                int y = d.y[i];
+                zero_grads(dW, db, m.L);  // accumulate grads over the batch
+                int correct_batch = 0;
+                float loss_batch = 0.0f;
 
-                mlp_forward_logits(&m, &x, &logits);
-                float L = cross_entropy_from_logits(&logits, y);
-                loss_sum += L;
+                for (int b = 0; b < B; ++b) {
+                    int i = idx_train[t0 + b];
+                    const float *row = &d.X[(size_t)i * (size_t)d.d];
+                    for (int j = 0; j < d.d; ++j) x.data[j] = row[j];
+                    int y = d.y[i];
 
-                if (argmax(&logits) == y) correct_train++;
+                    mlp_forward_logits(&m, &x, &logits);
+                    loss_batch += cross_entropy_from_logits(&logits, y);
+                    if (argmax(&logits) == y) correct_batch++;
 
-                mlp_backward_from_logits(&m, &x, y, dW, db, /*alpha=*/0.1f);
-                mlp_sgd_step(&m, dW, db, lr);
+                    // backward into temp grads (reusing dW/db as accumulators)
+                    mlp_backward_from_logits(&m, &x, y, dW, db, /*alpha=*/0.1f);
+                }
+
+                // average gradients
+                float invB = 1.0f / (float)B;
+                for (int l = 0; l < m.L; ++l) {
+                    int nW = dW[l].rows * dW[l].cols;
+                    int nb = db[l].cols;
+                    for (int i = 0; i < nW; ++i) dW[l].data[i] *= invB;
+                    for (int j = 0; j < nb; ++j) db[l].data[j] *= invB;
+                }
+
+                // parameter update
+                if (use_momentum) sgd_momentum_step(&optm, m.W, m.b, dW, db, lr);
+                else              sgd_step_params(m.W, m.b, dW, db, m.L, lr);
+
+                // accumulate epoch stats (optional)
+                correct_train += correct_batch;
+                loss_sum      += loss_batch;
             }
 
             // validation (if any)
@@ -264,6 +296,7 @@ int main(int argc, char **argv) {
         free(db);
         free(dW);
         mlp_free(&m);
+        if (use_momentum) sgd_momentum_free(&optm);
 
         // free indices + dataset
         free(idx_all);

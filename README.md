@@ -16,7 +16,8 @@ train
   --limit 2000 --val 0.1 \
   --layers 1 --units 64 \
   --epochs 10 \
-  --lr 0.01 \
+  --lr 0.05 \
+  --batch 32 \
   --seed 1337 \
   --out data/out/model.bin
 ```
