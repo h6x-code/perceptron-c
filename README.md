@@ -7,7 +7,7 @@ Building a modular perceptron in C for educational purposes.
 make clean
 make
 
-./perceptron gradcheck
+./perceptron train --dataset xor --layers 1 --units 4 --epochs 500 --lr 0.1 --seed 1337 --out data/out/model.bin
 
 # sanity: previous commands still work
 ./perceptron --help
@@ -15,6 +15,7 @@ make
 ./perceptron tensor-test 1337
 ./perceptron nn-test
 ./perceptron loss-test
+./perceptron gradcheck
 ```
 
 ## Success criteria (expected output)
