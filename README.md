@@ -20,11 +20,13 @@ make
 
 ## Success criteria (expected output)
 
-### ./perceptron gradcheck prints something like:
-`[gradcheck] loss=0.626060 max_rel_error=7.402e-05`
-`[gradcheck] OK (max_rel_error < 1e-4)`
+### ./perceptron train <args> prints something like:
+`[epoch  44] loss=0.631788 acc=100.00%`
+`[train] reached >=95% accuracy — stopping early.`
+`[save] wrote model to data/out/model.bin`
 
-- For loss-test, after must be strictly less than before.
+- Model should converge early
+- Binary should save to specified location
 
 ### valgrind shows no leaks:
 ```bash
