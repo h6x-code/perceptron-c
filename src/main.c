@@ -378,26 +378,46 @@ int main(int argc, char **argv) {
                 }
                 for (int t = 0; t < TT; ++t) pthread_join(pth[t], NULL);
 
-                // reduce grads from thread-local accumulators
-                Tensor *dW = NULL, *db = NULL; alloc_param_like(&m, &dW, &db); zero_param_stack(dW, db, m.L);
-                for (int t = 0; t < TT; ++t) {
-                    for (int l = 0; l < m.L; ++l) {
-                        int nW = m.W[l].rows * m.W[l].cols, nb = m.b[l].cols;
-                        for (int i = 0; i < nW; ++i) dW[l].data[i] += th[t].dW_local[l].data[i];
-                        for (int j = 0; j < nb; ++j) db[l].data[j] += th[t].db_local[l].data[j];
+                // Reduce per-thread grads deterministically with Kahan in double, and average by B
+                Tensor *dW = NULL, *db = NULL;
+                alloc_param_like(&m, &dW, &db);
+
+                const double invB = 1.0 / (double)B;
+
+                // For each layer, reduce weights then biases
+                for (int l = 0; l < m.L; ++l) {
+                    const int nW = m.W[l].rows * m.W[l].cols;
+                    const int nb = m.b[l].cols;
+
+                    // Weights: Kahan compensated sum in fixed thread order (0..TT-1)
+                    for (int i = 0; i < nW; ++i) {
+                        double sum = 0.0, c = 0.0;
+                        for (int t = 0; t < TT; ++t) {
+                            double y = (double)th[t].dW_local[l].data[i] - c;
+                            double tmp = sum + y;
+                            c = (tmp - sum) - y;
+                            sum = tmp;
+                        }
+                        dW[l].data[i] = (float)(sum * invB);
+                    }
+
+                    // Biases: Kahan compensated sum in fixed thread order (0..TT-1)
+                    for (int j = 0; j < nb; ++j) {
+                        double sum = 0.0, c = 0.0;
+                        for (int t = 0; t < TT; ++t) {
+                            double y = (double)th[t].db_local[l].data[j] - c;
+                            double tmp = sum + y;
+                            c = (tmp - sum) - y;
+                            sum = tmp;
+                        }
+                        db[l].data[j] = (float)(sum * invB);
                     }
                 }
-                // average by B
-                const float invB = 1.0f / (float)B;
-                for (int l = 0; l < m.L; ++l) {
-                    int nW = dW[l].rows * dW[l].cols, nb = db[l].cols;
-                    for (int i = 0; i < nW; ++i) dW[l].data[i] *= invB;
-                    for (int j = 0; j < nb; ++j) db[l].data[j] *= invB;
-                }
 
-                // single optimizer step
+                // Single optimizer step with averaged grads
                 if (use_momentum) sgd_momentum_step(&optm, m.W, m.b, dW, db, lr);
                 else              sgd_step_params  (m.W, m.b, dW, db, m.L, lr);
+                free_param_stack(dW, db, m.L);
 
                 // batch stats
                 int corr = 0; float lsum = 0.0f;
