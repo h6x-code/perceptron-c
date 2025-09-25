@@ -2,7 +2,7 @@
 
 CC       := clang
 CFLAGS   := -std=c11 -O2 -Wall -Wextra -pedantic -Isrc
-LDFLAGS  := -lm
+LDFLAGS  := -lm -pthread
 
 # Address/UB sanitizers (opt-in when debugging)
 SAN_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer

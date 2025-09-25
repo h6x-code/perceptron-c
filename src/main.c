@@ -22,6 +22,14 @@ static void usage(void) {
     puts("  ./perceptron predict --model path/to/model.bin");
 }
 
+// Context for workers
+typedef struct {
+    const MLP *m;
+    const Dataset *din;
+    int *pred;
+    float *conf;
+} PredCtx;
+
 
 // Misc helpers
 static double now_ms(void) {
@@ -108,6 +116,35 @@ static void explain_mnist_rc(int rc) {
     }
 }
 
+static void predict_range(int start, int end, void *user) {
+    PredCtx *C = (PredCtx*)user;
+    Tensor x = tensor_alloc(1, C->m->d_in);
+    Tensor logits = tensor_alloc(1, C->m->d_out);
+
+    for (int i = start; i < end; ++i) {
+        const float *row = &C->din->X[(size_t)i * (size_t)C->din->d];
+        for (int j = 0; j < C->m->d_in; ++j) x.data[j] = row[j];
+
+        // forward (stateless wrt shared model: only reads W,b; uses local x,logits)
+        mlp_forward_logits(C->m, &x, &logits);
+
+        // softmax → confidence
+        float mx = logits.data[0];
+        for (int k = 1; k < C->m->d_out; ++k) if (logits.data[k] > mx) mx = logits.data[k];
+        float sum = 0.f;
+        for (int k = 0; k < C->m->d_out; ++k) { logits.data[k] = expf(logits.data[k] - mx); sum += logits.data[k]; }
+        int best = 0; float bestp = logits.data[0] / sum;
+        for (int k = 1; k < C->m->d_out; ++k) {
+            float p = logits.data[k] / sum;
+            if (p > bestp) { bestp = p; best = k; }
+        }
+        C->pred[i] = best;
+        C->conf[i] = bestp;
+    }
+    tensor_free(&logits);
+    tensor_free(&x);
+}
+
 int main(int argc, char **argv) {
     if (argc < 2 || strcmp(argv[1], "--help") == 0) {
         usage();
@@ -134,6 +171,7 @@ int main(int argc, char **argv) {
         float lr_decay = 1.0f;  //no decay by default
         int lr_step = 0;    // 0 = never
         int patience = 0;   // 0 = disabled
+        int threads = 1;
 
         for (int a = 2; a < argc; ++a) {
             if (!strcmp(argv[a], "--epochs") && a+1 < argc) { epochs = atoi(argv[++a]); }
@@ -155,7 +193,7 @@ int main(int argc, char **argv) {
             else if (!strcmp(argv[a], "--lr-decay") && a+1 < argc) { lr_decay = (float)atof(argv[++a]); }
             else if (!strcmp(argv[a], "--lr-step")  && a+1 < argc) { lr_step  = atoi(argv[++a]); }
             else if (!strcmp(argv[a], "--patience") && a+1 < argc) { patience = atoi(argv[++a]); }
-
+            else if (!strcmp(argv[a], "--threads") && a+1 < argc) { threads = atoi(argv[++a]); if (threads < 1) threads = 1; }
         }
         if (units_cnt != layers_hidden) { fprintf(stderr, "units count (%d) must match --layers (%d)\n", units_cnt, layers_hidden); return 1; }
         if (val_frac < 0.0f) val_frac = 0.0f; if (val_frac > 0.9f) val_frac = 0.9f;
