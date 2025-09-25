@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <string.h>
+#include "data.h"
 
 static void usage(void) {
     puts("perceptron - C11 MLP\n"
@@ -16,7 +17,10 @@ int main(int argc, char **argv) {
         return 0;
     }
     if (strcmp(argv[1], "train") == 0) {
-        puts("[train] subcommand recognized (flags parsed later).");
+        const char *ds = (argc > 2) ? argv[2] : "xor";
+        Dataset d = load_dataset(ds);
+        if (d.n == 0) { fprintf(stderr, "unknown dataset '%s'\n", ds); return 1; }
+        printf("[train] dataset=%s n=%d d=%d k=%d\n", ds, d.n, d.d, d.k);
         return 0;
     }
     if (strcmp(argv[1], "predict") == 0) {
