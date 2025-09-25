@@ -11,13 +11,14 @@ train
 ```bash
 ./perceptron train \
   --dataset mnist \
-  --mnist-images path/to/MNIST/train-images-idx3-ubyte \
-  --mnist-labels path/to/MNIST/train-labels-idx1-ubyte \
-  --limit 2000 \
+  --mnist-images data/MNIST/raw/train-images-idx3-ubyte \
+  --mnist-labels data/MNIST/raw/train-labels-idx1-ubyte \
+  --limit 2000 --val 0.1 \
   --layers 1 --units 64 \
   --epochs 10 \
   --lr 0.01 \
-  --seed 1337
+  --seed 1337 \
+  --out data/out/model.bin
 ```
 check these for back
 ```bash
@@ -33,7 +34,7 @@ check these for back
 ## Success criteria (expected output)
 
 ### ./perceptron train <args> prints something like:
-`[epoch  44] loss=0.631788 acc=100.00%`
+`[epoch   5] loss=0.146914 acc=95.55% time=4377.5ms`
 `[train] reached >=95% accuracy — stopping early.`
 `[save] wrote model to data/out/model.bin`
 

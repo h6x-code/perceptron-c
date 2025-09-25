@@ -240,8 +240,8 @@ int main(int argc, char **argv) {
                     e, loss_sum/(float)n_train, acc_tr*100.0f, e_ms);
             }
 
-            if (acc_tr >= 0.95f && (n_val == 0 || acc_va >= 0.95f)) {
-                puts("[train] reached >=95% accuracy — stopping early.");
+            if (acc_tr >= 0.99f && (n_val == 0 || acc_va >= 0.99f)) {
+                puts("[train] reached >=99% accuracy — stopping early.");
                 break;
             }
         }
@@ -258,12 +258,19 @@ int main(int argc, char **argv) {
         }
 
         // cleanup
-        tensor_free(&logits); tensor_free(&x);
-        for (int l=0;l<m.L;l++){ tensor_free(&db[l]); tensor_free(&dW[l]); }
-        free(db); free(dW);
+        tensor_free(&logits);
+        tensor_free(&x);
+        for (int l = 0; l < m.L; ++l) { tensor_free(&db[l]); tensor_free(&dW[l]); }
+        free(db);
+        free(dW);
         mlp_free(&m);
+
+        // free indices + dataset
         free(idx_all);
+        dataset_free(&d);
+
         return 0;
+
     }
 
     if (strcmp(argv[1], "predict") == 0) {
