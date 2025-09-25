@@ -48,6 +48,29 @@ static int parse_units(const char *s, int *out, int maxn) {
     return n;
 }
 
+static void alloc_like_params(const MLP *m, Tensor **W, Tensor **b) {
+    *W = (Tensor*)malloc(m->L * sizeof(Tensor));
+    *b = (Tensor*)malloc(m->L * sizeof(Tensor));
+    for (int l = 0; l < m->L; ++l) {
+        (*W)[l] = tensor_alloc(m->W[l].rows, m->W[l].cols);
+        (*b)[l] = tensor_alloc(1, m->b[l].cols);
+    }
+}
+
+static void free_params(Tensor *W, Tensor *b, int L) {
+    for (int l = 0; l < L; ++l) { tensor_free(&W[l]); tensor_free(&b[l]); }
+    free(W); free(b);
+}
+
+static void copy_params(Tensor *dstW, Tensor *dstB, const Tensor *srcW, const Tensor *srcB, int L) {
+    for (int l = 0; l < L; ++l) {
+        int nW = srcW[l].rows * srcW[l].cols;
+        int nb = srcB[l].cols;
+        memcpy(dstW[l].data, srcW[l].data, (size_t)nW * sizeof(float));
+        memcpy(dstB[l].data, srcB[l].data, (size_t)nb * sizeof(float));
+    }
+}
+
 // tiny deterministic RNG for shuffling (LCG)
 static inline uint32_t lcg32(uint32_t *s){ *s = (*s * 1664525u) + 1013904223u; return *s; }
 
@@ -108,9 +131,9 @@ int main(int argc, char **argv) {
         const char *norm = "minmax"; // default
         int batch = 32; // mini-batch size
         float momentum = 0.0f;  // 0 = vanilla SGD
-        float lr_decay = 1.0f;
-        int lr_step = 0;
-        int patience = 0;
+        float lr_decay = 1.0f;  //no decay by default
+        int lr_step = 0;    // 0 = never
+        int patience = 0;   // 0 = disabled
 
         for (int a = 2; a < argc; ++a) {
             if (!strcmp(argv[a], "--epochs") && a+1 < argc) { epochs = atoi(argv[++a]); }
@@ -129,13 +152,17 @@ int main(int argc, char **argv) {
             else if (!strcmp(argv[a], "--batch") && a+1 < argc)    { batch = atoi(argv[++a]); }
             else if (!strcmp(argv[a], "--momentum") && a+1 < argc) { momentum = (float)atof(argv[++a]); }
             else if (!strcmp(argv[a], "--help")) { usage(); return 0; }
+            else if (!strcmp(argv[a], "--lr-decay") && a+1 < argc) { lr_decay = (float)atof(argv[++a]); }
+            else if (!strcmp(argv[a], "--lr-step")  && a+1 < argc) { lr_step  = atoi(argv[++a]); }
+            else if (!strcmp(argv[a], "--patience") && a+1 < argc) { patience = atoi(argv[++a]); }
+
         }
         if (units_cnt != layers_hidden) { fprintf(stderr, "units count (%d) must match --layers (%d)\n", units_cnt, layers_hidden); return 1; }
         if (val_frac < 0.0f) val_frac = 0.0f; if (val_frac > 0.9f) val_frac = 0.9f;
 
         printf("[train] ds=%s layers=%d units=", dataset, layers_hidden);
         for (int i=0;i<units_cnt;i++) printf("%s%d", (i?",":""), units_arr[i]);
-        printf(" epochs=%d lr=%.4f seed=%u val=%.2f batch=%d mom=%.2f\n", epochs, lr, seed, val_frac, batch, momentum);
+        printf(" epochs=%d lr=%.4f seed=%u val=%.2f batch=%d mom=%.2f decay=%.3f step=%d patience=%d\n", epochs, lr, seed, val_frac, batch, momentum, lr_decay, lr_step, patience);
 
         // Dataset + fixed split
         Dataset d = {0};
@@ -203,6 +230,16 @@ int main(int argc, char **argv) {
         if (use_momentum) {
             if (sgd_momentum_init(&optm, m.L, m.W, m.b, momentum) != 0) {
                 fprintf(stderr, "momentum init failed\n"); /* free & exit */ }
+        }
+
+        float best_metric = -1.0f;    // best val acc (or train acc if no val)
+        int   since_improve = 0;
+
+        Tensor *bestW = NULL, *bestB = NULL;
+        if (out_path) {                      // only snapshot if we plan to save
+            alloc_like_params(&m, &bestW, &bestB);
+            copy_params(bestW, bestB, m.W, m.b, m.L); // initial snapshot
+            best_metric = 0.0f;
         }
 
         double t0 = now_ms();
@@ -274,6 +311,32 @@ int main(int argc, char **argv) {
             float acc_tr = (float)correct_train / (float)n_train;
             float acc_va = (n_val>0) ? ((float)correct_val / (float)n_val) : NAN;
 
+            // Choose the metric: prefer validation if present
+            float metric = (n_val > 0) ? acc_va : acc_tr;
+
+            // Update best & early stopping
+            if (metric > best_metric + 1e-7f) {
+                best_metric = metric;
+                since_improve = 0;
+                if (bestW) copy_params(bestW, bestB, m.W, m.b, m.L);
+            } else {
+                since_improve++;
+            }
+
+            // Learning-rate decay
+            if (lr_step > 0 && (e % lr_step) == 0 && lr_decay > 0.0f && lr_decay < 1.0f) {
+                lr *= lr_decay;
+                if (lr < 1e-8f) lr = 1e-8f; // safety floor
+                printf("[train] lr decayed to %.6f\n", lr);
+            }
+
+            // Early stop (only if patience > 0; if no val, patience uses train metric)
+            if (patience > 0 && since_improve >= patience) {
+                printf("[train] early stop (no improvement for %d epochs). Best=%.2f%%\n",
+                    patience, best_metric * 100.0f);
+                break;
+            }
+
             if (n_val > 0) {
                 printf("[epoch %3d] loss=%.6f acc=%.2f%% val=%.2f%% time=%.1fs\n",
                     e, loss_sum/(float)n_train, acc_tr*100.0f, acc_va*100.0f, e_s);
@@ -292,6 +355,11 @@ int main(int argc, char **argv) {
 
         printf("[train] total time: %.1fs\n", t_s);
 
+        // restore best snapshot if available
+        if (bestW && bestB) {
+            copy_params(m.W, m.b, bestW, bestB, m.L);
+        }
+
         if (out_path) {
             if (io_save_mlp(&m, out_path) == 0) {
                 printf("[save] wrote model to %s\n", out_path);
@@ -308,6 +376,8 @@ int main(int argc, char **argv) {
         free(dW);
         mlp_free(&m);
         if (use_momentum) sgd_momentum_free(&optm);
+        if (bestW) { free_params(bestW, bestB, m.L); }
+
 
         // free indices + dataset
         free(idx_all);
@@ -319,31 +389,75 @@ int main(int argc, char **argv) {
 
     if (strcmp(argv[1], "predict") == 0) {
         const char *model_path = NULL;
+        const char *input_spec = NULL;
+        int csv_has_header = 0;
+
         for (int a = 2; a < argc; ++a) {
             if (!strcmp(argv[a], "--model") && a+1 < argc) { model_path = argv[++a]; }
+            else if (!strcmp(argv[a], "--input") && a+1 < argc) { input_spec = argv[++a]; }
+            else if (!strcmp(argv[a], "--csv-has-header")) { csv_has_header = 1; }
+            else if (!strcmp(argv[a], "--help")) { print_usage(); return 0; }
         }
-        if (!model_path) { fprintf(stderr, "usage: ./perceptron predict --model path\n"); return 2; }
+        if (!model_path || !input_spec) {
+            fprintf(stderr, "predict: require --model and --input\n");
+            return 1;
+        }
 
+        // Load model
         MLP m = {0};
-        if (io_load_mlp(&m, model_path) != 0) { fprintf(stderr, "load failed: %s\n", model_path); return 1; }
+        if (io_load_mlp(&m, model_path) != 0) {
+            fprintf(stderr, "[predict] failed to load model: %s\n", model_path);
+            return 1;
+        }
 
-        Dataset d = load_dataset("xor");
+        // Load inputs
+        Dataset din = {0};
+        if (!strncmp(input_spec, "csv:", 4)) {
+            const char *path = input_spec + 4;
+            int rc = dataset_load_csv_features(path, csv_has_header, &din);
+            if (rc != 0) { fprintf(stderr, "[predict] CSV load failed (%d): %s\n", rc, path); mlp_free(&m); return 1; }
+        } else {
+            fprintf(stderr, "[predict] unsupported input spec: %s\n", input_spec);
+            mlp_free(&m);
+            return 1;
+        }
+
+        if (din.d != m.d_in) {
+            fprintf(stderr, "[predict] feature dim mismatch: model d_in=%d, csv d=%d\n", m.d_in, din.d);
+            dataset_free(&din); mlp_free(&m); return 1;
+        }
+
+        // Inference
         Tensor x = tensor_alloc(1, m.d_in);
         Tensor logits = tensor_alloc(1, m.d_out);
+        printf("[predict] n=%d d=%d -> k=%d\n", din.n, din.d, m.d_out);
 
-        int correct = 0;
-        for (int i = 0; i < d.n; ++i) {
-            x.data[0] = d.X[2*i + 0];
-            x.data[1] = d.X[2*i + 1];
+        for (int i = 0; i < din.n; ++i) {
+            const float *row = &din.X[(size_t)i * (size_t)din.d];
+            for (int j = 0; j < din.d; ++j) x.data[j] = row[j];
+
             mlp_forward_logits(&m, &x, &logits);
-            if (argmax(&logits) == d.y[i]) correct++;
-        }
-        printf("[predict] XOR accuracy: %.2f%% (%d/%d)\n", 100.0f*correct/d.n, correct, d.n);
 
-        tensor_free(&logits); tensor_free(&x);
+            // softmax
+            float mx = logits.data[0]; for (int k = 1; k < m.d_out; ++k) if (logits.data[k] > mx) mx = logits.data[k];
+            float sum = 0.f; for (int k = 0; k < m.d_out; ++k) { logits.data[k] = expf(logits.data[k] - mx); sum += logits.data[k]; }
+            for (int k = 0; k < m.d_out; ++k) logits.data[k] /= sum;
+
+            // argmax
+            int pred = 0; float bestp = logits.data[0];
+            for (int k = 1; k < m.d_out; ++k) if (logits.data[k] > bestp) { bestp = logits.data[k]; pred = k; }
+
+            printf("%d,%.6f\n", pred, bestp);
+        }
+
+        // cleanup
+        tensor_free(&logits);
+        tensor_free(&x);
+        dataset_free(&din);
         mlp_free(&m);
         return 0;
     }
+
 
     if (strcmp(argv[1], "tensor-test") == 0) {
         if (argc < 3) { fprintf(stderr, "usage: ./perceptron tensor-test <seed>\n"); return 2; }

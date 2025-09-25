@@ -15,6 +15,10 @@ Dataset load_dataset(const char *name);  // "and", "or", "xor"
 // NEW: CSV loader (last column is label). If has_header!=0, skip first line.
 int dataset_load_csv(const char *path, int has_header, Dataset *out_ds);
 
+// Load a CSV with ONLY features (no label column). If has_header!=0 skip first line.
+// Fills out_ds->n and ->d and allocates X; sets k=0 and y=NULL.
+int dataset_load_csv_features(const char *path, int has_header, Dataset *out_ds);
+
 // NEW: MNIST IDX loader (expects uncompressed idx3-ubyte/idx1-ubyte)
 int dataset_load_mnist_idx(const char *images_path, const char *labels_path,
                            int limit, Dataset *out_ds);

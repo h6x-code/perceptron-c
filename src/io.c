@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 
@@ -75,33 +76,31 @@ int io_load_mlp(MLP *m, const char *path) {
 
     ModelHeader h;
     if (fread(&h, sizeof(h), 1, f) != 1) { fclose(f); return 2; }
-    if (h.magic != MAGIC_PCML || h.version != VERSION) { fclose(f); return 3; }
+    if (h.magic != MAGIC_PCML)           { fclose(f); return 3; }
+    if (h.version != VERSION)            { fclose(f); return 4; }
 
-    // read dims
     int L = (int)h.L;
     int *dims = (int*)malloc((size_t)(L + 1) * sizeof(int));
-    if (!dims) { fclose(f); return 4; }
+    if (!dims) { fclose(f); return 5; }
     for (int i = 0; i <= L; ++i) {
-        uint32_t di = 0;
-        if (fread(&di, sizeof(di), 1, f) != 1) { free(dims); fclose(f); return 5; }
+        uint32_t di;
+        if (fread(&di, sizeof(di), 1, f) != 1) { free(dims); fclose(f); return 6; }
         dims[i] = (int)di;
     }
 
-    // reconstruct MLP
-    int n_hidden = L - 1;
-    int *hidden = (n_hidden > 0) ? (int*)malloc((size_t)n_hidden * sizeof(int)) : NULL;
-    for (int i = 0; i < n_hidden; ++i) hidden[i] = dims[i + 1];
+    // init empty model using dims from file
+    int d_in  = dims[0];
+    int d_out = dims[L];
+    if (mlp_init(m, d_in, d_out, /*hidden*/ dims + 1, /*n_hidden*/ L - 1, /*seed unused*/ 0) != 0) {
+        free(dims); fclose(f); return 7;
+    }
 
-    int rc = mlp_init(m, (int)h.d_in, (int)h.d_out, hidden, n_hidden, /*seed*/1337u);
-    if (hidden) free(hidden);
-    if (rc != 0) { free(dims); fclose(f); return 6; }
-
-    // load parameters
-    for (int l = 0; l < m->L; ++l) {
+    // read weights/biases
+    for (int l = 0; l < L; ++l) {
         int nW = m->W[l].rows * m->W[l].cols;
         int nb = m->b[l].cols;
-        if ((int)fread(m->W[l].data, sizeof(float), nW, f) != nW) { fclose(f); free(dims); return 7; }
-        if ((int)fread(m->b[l].data, sizeof(float), nb, f) != nb) { fclose(f); free(dims); return 8; }
+        if ((int)fread(m->W[l].data, sizeof(float), nW, f) != nW) { free(dims); fclose(f); mlp_free(m); return 8; }
+        if ((int)fread(m->b[l].data, sizeof(float), nb, f) != nb) { free(dims); fclose(f); mlp_free(m); return 9; }
     }
 
     free(dims);

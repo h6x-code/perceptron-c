@@ -135,6 +135,53 @@ int dataset_load_csv(const char *path, int has_header, Dataset *out_ds) {
     return 0;
 }
 
+int dataset_load_csv_features(const char *path, int has_header, Dataset *out_ds) {
+    memset(out_ds, 0, sizeof(*out_ds));
+    FILE *f = fopen(path, "r");
+    if (!f) return 1;
+
+    // Pass 1: count rows & cols
+    char buf[1<<12];
+    int rows = 0, cols = -1;
+    long start = ftell(f);
+    while (fgets(buf, sizeof(buf), f)) {
+        if (is_blank_line(buf)) continue;
+        if (has_header && rows == 0) { rows++; continue; }
+        int c = 1; for (char *p = buf; *p; ++p) if (*p == ',') c++;
+        if (cols < 0) cols = c;
+    }
+    fseek(f, start, SEEK_SET);
+    if (rows <= (has_header?1:0) || cols <= 0) { fclose(f); return 2; }
+
+    int n = rows - (has_header?1:0);
+    int d = cols;
+    float *X = (float*)malloc((size_t)n * (size_t)d * sizeof(float));
+    if (!X) { fclose(f); return 3; }
+
+    // Pass 2: parse
+    int row = - (has_header ? 1 : 0);
+    while (fgets(buf, sizeof(buf), f)) {
+        if (is_blank_line(buf)) continue;
+        row++;
+        if (has_header && row < 0) continue;
+
+        int col = 0;
+        char *tok = strtok(buf, ",\n\r");
+        while (tok && col < d) {
+            X[(size_t)row * d + col] = (float)atof(tok);
+            col++;
+            tok = strtok(NULL, ",\n\r");
+        }
+        if (col != d) { fclose(f); free(X); return 4; }
+    }
+    fclose(f);
+
+    out_ds->n = n; out_ds->d = d; out_ds->k = 0;
+    out_ds->X = X; out_ds->y = NULL;
+    return 0;
+}
+
+
 // ---------- MNIST IDX (uncompressed) ----------
 
 static int read_be32(FILE *f, int *out) {
