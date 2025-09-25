@@ -329,7 +329,7 @@ int main(int argc, char **argv) {
         }
 
         // Validation workspace (used for single-threaded val forward)
-        MLPWS val_ws = {0};
+        MLPWS val_ws = (MLPWS){0};
         if (n_val > 0) {
             if (mlpws_init(&val_ws, &m) != 0) {
                 fprintf(stderr, "[train] failed to init validation workspace\n");
@@ -346,7 +346,7 @@ int main(int argc, char **argv) {
         ThreadSlot *th = (ThreadSlot*)calloc((size_t)T, sizeof(ThreadSlot));
         for (int t = 0; t < T; ++t) {
             mlpws_init(&th[t].ws, &m);
-            th[t].x      = tensor_alloc(1, m.d_in);
+            th[t].x = tensor_alloc(1, m.d_in);
             th[t].logits = tensor_alloc(1, m.d_out);
             alloc_param_like(&m, &th[t].dW_local, &th[t].db_local);
         }
@@ -535,9 +535,6 @@ int main(int argc, char **argv) {
         free(db);
         free(dW);
         if (n_val > 0) { mlpws_free(&val_ws); }
-        mlp_free(&m);
-        if (use_momentum) sgd_momentum_free(&optm);
-        if (bestW) { free_params(bestW, bestB, m.L); }
 
         // Free threads
         for (int t = 0; t < T; ++t) {
@@ -553,6 +550,10 @@ int main(int argc, char **argv) {
             mlpws_free(&th[t].ws);
         }
         free(th); th = NULL;
+
+        mlp_free(&m);
+        if (use_momentum) sgd_momentum_free(&optm);
+        if (bestW) { free_params(bestW, bestB, m.L); }
 
         // free indices + dataset
         free(idx_all);
