@@ -1,8 +1,11 @@
+#include <math.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "data.h"
 #include "nn.h"
+#include "opt.h"
 #include "tensor.h"
 
 static void usage(void) {
@@ -14,6 +17,150 @@ static void usage(void) {
          "\nDefaults: --layers 1 --units 128 --epochs 10 --lr 0.01 --batch 32 --seed 1337");
 }
 
+// Helpers
+static void clip_inplace(float *g, int n, float limit) {
+    for (int i = 0; i < n; ++i) {
+        if (g[i] >  limit) g[i] =  limit;
+        if (g[i] < -limit) g[i] = -limit;
+    }
+}
+
+// tiny deterministic RNG for shuffling (LCG)
+static inline uint32_t lcg32(uint32_t *s){ *s = (*s * 1664525u) + 1013904223u; return *s; }
+
+// Fisher–Yates shuffle of indices[0..n-1], deterministic by seed
+static void shuffle_indices(int *idx, int n, unsigned seed) {
+    uint32_t s = seed;
+    for (int i = n - 1; i > 0; --i) {
+        uint32_t r = lcg32(&s);
+        int j = (int)(r % (uint32_t)(i + 1));
+        int tmp = idx[i]; idx[i] = idx[j]; idx[j] = tmp;
+    }
+}
+
+// Argmax over a 1xK logits/probs vector
+static int argmax(const Tensor *t) {
+    int n = t->rows * t->cols;
+    int best = 0;
+    float v = t->data[0];
+    for (int i = 1; i < n; i++) {
+        if (t->data[i] > v) { v = t->data[i]; best = i; }
+    }
+    return best;
+}
+
+// Train a fixed 2–2–2 MLP on XOR with SGD
+static void train_xor(int epochs, float lr, unsigned seed) {
+    // Load XOR (n=4, d=2, k=2)
+    Dataset d = load_dataset("xor");
+    if (d.n == 0) { fprintf(stderr, "dataset load failed\n"); return; }
+
+    // Parameters
+    Tensor W1 = tensor_alloc(2, 2);
+    Tensor b1 = tensor_alloc(1, 2);
+    Tensor W2 = tensor_alloc(2, 2);
+    Tensor b2 = tensor_alloc(1, 2);
+
+    // Deterministic small init in [-0.5, 0.5]
+    tensor_randu(&W1, seed); for (int i=0;i<4;i++) W1.data[i] *= 0.5f;
+    tensor_randu(&W2, seed+1); for (int i=0;i<4;i++) W2.data[i] *= 0.5f;
+    b1.data[0] = 0.2f; b1.data[1] = -0.3f;   // away from ReLU kink
+    b2.data[0] = 0.0f; b2.data[1] = 0.0f;
+
+    // Grad buffers
+    Tensor dW1 = tensor_alloc(2, 2);
+    Tensor db1 = tensor_alloc(1, 2);
+    Tensor dW2 = tensor_alloc(2, 2);
+    Tensor db2 = tensor_alloc(1, 2);
+
+    // Work buffers (forward)
+    Tensor x  = tensor_alloc(1, 2);
+    Tensor z1 = tensor_alloc(1, 2);
+    Tensor a1 = tensor_alloc(1, 2);
+    Tensor z2 = tensor_alloc(1, 2);
+
+    // Work buffers (backward)
+    Tensor dz2 = tensor_alloc(1, 2);
+    Tensor da1 = tensor_alloc(1, 2);
+    Tensor dx  = tensor_alloc(1, 2);
+
+    int idx[4] = {0,1,2,3};
+
+    for (int e = 1; e <= epochs; ++e) {
+        shuffle_indices(idx, d.n, seed + (unsigned)e);
+
+        float loss_sum = 0.0f;
+        int correct = 0;
+
+        for (int t = 0; t < d.n; ++t) {
+            int i = idx[t];
+
+            // Load sample into x (1x2)
+            x.data[0] = d.X[2*i + 0];
+            x.data[1] = d.X[2*i + 1];
+            int y = d.y[i];
+
+            // Forward: z1 -> a1 -> z2
+            dense_forward(&x, &W1, &b1, &z1);
+
+            // a1 = ReLU(z1); (copy z1 to a1 then relu)
+            for (int k = 0; k < 2; ++k) a1.data[k] = z1.data[k];
+            relu_inplace(&a1);
+
+            dense_forward(&a1, &W2, &b2, &z2);
+
+            // Loss and accuracy
+            float L = cross_entropy_from_logits(&z2, y);
+            loss_sum += L;
+
+            if (isnan(L) || isinf(L)) {
+                fprintf(stderr, "[train] numerical issue (loss=%f). Try smaller --lr.\n", L);
+                break;
+            }
+
+            // argmax over logits (same result as softmax argmax, no mutation)
+            if (argmax(&z2) == y) {
+                correct++;
+            }
+
+            // Backward: logits -> a1
+            softmax_ce_backward_from_logits(&z2, y, &dz2);
+            dense_backward(&a1, &W2, &dz2, &da1, &dW2, &db2);
+
+            // Backward: ReLU (use pre-activation z1 for mask), then to x
+            relu_backward_inplace(&z1, &da1);
+            dense_backward(&x, &W1, &da1, &dx, &dW1, &db1);
+
+            // Clip grads to avoid blow-ups on rare outliers
+            clip_inplace(dW2.data, 4, 5.0f);
+            clip_inplace(db2.data, 2, 5.0f);
+            clip_inplace(dW1.data, 4, 5.0f);
+            clip_inplace(db1.data, 2, 5.0f);
+
+            // SGD step
+            sgd_step(W2.data, dW2.data, 4, lr);
+            sgd_step(b2.data, db2.data, 2, lr);
+            sgd_step(W1.data, dW1.data, 4, lr);
+            sgd_step(b1.data, db1.data, 2, lr);
+        }
+
+        float acc = (float)correct / (float)d.n;
+        printf("[epoch %3d] loss=%.6f acc=%.2f%%\n", e, loss_sum / (float)d.n, acc * 100.0f);
+
+        // early exit if solid accuracy
+        if (acc >= 0.95f) {
+            printf("[train] reached >=95%% accuracy — stopping early.\n");
+            break;
+        }
+    }
+
+    // cleanup
+    tensor_free(&dx);  tensor_free(&da1); tensor_free(&dz2);
+    tensor_free(&z2);  tensor_free(&a1);  tensor_free(&z1); tensor_free(&x);
+    tensor_free(&dW2); tensor_free(&db2); tensor_free(&dW1); tensor_free(&db1);
+    tensor_free(&b2);  tensor_free(&W2);  tensor_free(&b1);  tensor_free(&W1);
+}
+
 int main(int argc, char **argv) {
     if (argc < 2 || strcmp(argv[1], "--help") == 0) {
         usage();
@@ -21,12 +168,30 @@ int main(int argc, char **argv) {
     }
 
     if (strcmp(argv[1], "train") == 0) {
-        const char *ds = (argc > 2) ? argv[2] : "xor";
-        Dataset d = load_dataset(ds);
-        if (d.n == 0) { fprintf(stderr, "unknown dataset '%s'\n", ds); return 1; }
-        printf("[train] dataset=%s n=%d d=%d k=%d\n", ds, d.n, d.d, d.k);
+        // Minimal flags for now: --epochs N --lr X --seed S --dataset xor
+        int    epochs = 2000;
+        float  lr     = 0.1f;
+        unsigned seed = 1337;
+        const char *dataset = "xor";
+
+        // simple flag parse (very minimal)
+        for (int a = 2; a < argc; ++a) {
+            if (!strcmp(argv[a], "--epochs") && a+1 < argc) { epochs = atoi(argv[++a]); }
+            else if (!strcmp(argv[a], "--lr") && a+1 < argc) { lr = (float)atof(argv[++a]); }
+            else if (!strcmp(argv[a], "--seed") && a+1 < argc) { seed = (unsigned)strtoul(argv[++a], NULL, 10); }
+            else if (!strcmp(argv[a], "--dataset") && a+1 < argc) { dataset = argv[++a]; }
+        }
+
+        if (strcmp(dataset, "xor") != 0) {
+            fprintf(stderr, "Only --dataset xor is supported at this step.\n");
+            return 1;
+        }
+
+        printf("[train] dataset=%s epochs=%d lr=%.4f seed=%u\n", dataset, epochs, lr, seed);
+        train_xor(epochs, lr, seed);
         return 0;
     }
+
 
     if (strcmp(argv[1], "predict") == 0) {
         puts("[predict] subcommand recognized (flags parsed later).");
