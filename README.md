@@ -3,7 +3,7 @@
 A from-scratch **multilayer perceptron (MLP)** in pure C11.  
 No external libraries — just `clang`/`gcc`, math, and grit.
 
-Built as an **educational project**: the code emphasizes clarity, memory safety (Valgrind/ASan clean), and understanding of how forward/backward propagation, cross-entropy, and SGD actually work at a low level.
+Built as an **educational project**: the code emphasizes clarity, memory safety (Valgrind clean), and understanding of how forward/backward propagation, cross-entropy, and SGD actually work at a low level.
 
 ---
 
