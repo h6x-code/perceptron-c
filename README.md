@@ -1,53 +1,81 @@
 # perceptron-c
-Building a modular perceptron in C for educational purposes.
 
-## testing
-compile from project root 
+A from-scratch **multilayer perceptron (MLP)** in pure C11.  
+No external libraries — just `clang`/`gcc`, math, and grit.
+
+Built as an **educational project**: the code emphasizes clarity, memory safety (Valgrind/ASan clean), and understanding of how forward/backward propagation, cross-entropy, and SGD actually work at a low level.
+
+---
+
+## Features
+
+- Written in **portable C11** (Linux/macOS).
+- Shape-flexible MLP (`--layers` / `--units a,b,c`).
+- Forward, backward, cross-entropy, ReLU, softmax.
+- Optimizers: SGD + momentum, optional LR scheduling.
+- Data loaders: synthetic (XOR, AND, OR), **MNIST IDX format**.
+- Save/load models in compact binary format.
+- CLI interface for training and prediction.
+- Memory checked with `valgrind`.
+
+---
+
+## Quick Start
+
+Clone and build:
+
 ```bash
-make clean
+git clone https://github.com/h6x-code/perceptron-c.git
+cd perceptron-c
 make
+./perceptron tensor-test 42     # smoke test tensors
+./perceptron nn-test            # check forward softmax
+./perceptron gradcheck          # finite-diff gradient check
 ```
-train
+
+---
+
+## Training Examples
+
+### XOR (toy dataset)
+```bash
+./perceptron train \
+  --dataset xor \
+  --layers 1 --units 4 \
+  --epochs 500 \
+  --lr 0.1 --seed 1337
+```
+
+### MNIST (IDX format)
+Download MNIST (not included in repo), then:
 ```bash
 ./perceptron train \
   --dataset mnist \
   --mnist-images data/MNIST/raw/train-images-idx3-ubyte \
   --mnist-labels data/MNIST/raw/train-labels-idx1-ubyte \
-  --val 0.1 \
+  --limit 10000 --val 0.1 \
   --layers 2 --units 128,64 \
-  --epochs 30 \
-  --lr 0.05 \
-  --batch 32 \
-  --momentum 0.9 \
+  --epochs 50 \
+  --lr 0.05 --batch 64 --momentum 0.9 \
+  --lr-decay 0.9 --lr-step 3 --patience 10 \
   --seed 1337 \
-  --out data/out/model.bin
-```
-check these for back
-```bash
-# sanity: previous commands still work
-./perceptron --help
-./perceptron train xor
-./perceptron tensor-test 1337
-./perceptron nn-test
-./perceptron loss-test
-./perceptron gradcheck
+  --out data/out/mnist-2layer.bin
 ```
 
-## Success criteria (expected output)
+---
 
-### ./perceptron train <args> prints something like:
-`[epoch  29] loss=0.146914 acc=99.55% time=4377.5ms`
+## CLI Overview
 
-`[train] reached >=99% accuracy — stopping early.`
+### Subcommands:
+- `train`: train a model
+- `predict`: run inference on saved model
+- `tensor-test`, `nn-test`, `gradcheck`: internal checks
 
-`[save] wrote model to data/out/model.bin`
-
-- Model should converge early
-- Binary should save to specified location
-
-### valgrind shows no leaks:
-```bash
-valgrind --leak-check=full ./perceptron train <args>
-```
-
-- Expect: All heap blocks were freed -- no leaks are possible.
+### Core flags:
+- `--layers N` and `--units a,b,c`
+- `--epochs E` `--lr α` `--batch B` `--momentum μ`
+- `--lr-decay r` `--lr-step k` `--patience p`
+- `--dataset xor|and|or|mnist|csv:...`
+- `--out path/to/model.bin` (for saving)
+- `--seed S` (deterministic runs)
+Run `./perceptron --help` for details.
