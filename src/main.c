@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include "data.h"
 #include "io.h"
 #include "nn.h"
@@ -11,16 +12,27 @@
 #include "tensor.h"
 
 static void usage(void) {
-    puts("perceptron - C11 MLP\n"
-         "Usage:\n"
-         "  ./perceptron --help\n"
-         "  ./perceptron train   [flags]\n"
-         "  ./perceptron predict [flags]\n"
-         "\nDefaults: --layers 1 --units 128 --epochs 10 --lr 0.01 --batch 32 --seed 1337");
+    puts("perceptron usage:");
+    puts("  ./perceptron --help");
+    puts("  ./perceptron gradcheck");
+    puts("  ./perceptron nn-test | tensor-test <seed>");
+    puts("  ./perceptron train --dataset xor [--layers N --units a,b,c]");
+    puts("                    [--epochs 500 --lr 0.1 --seed 1337]");
+    puts("                    [--val 0.25] [--out path/to/model.bin]");
+    puts("  ./perceptron predict --model path/to/model.bin");
 }
 
 
 // Misc helpers
+static double now_ms(void) {
+#ifdef CLOCK_MONOTONIC
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1e6;
+#else
+    return (double)clock() * 1000.0 / (double)CLOCKS_PER_SEC;
+#endif
+}
 
 static int parse_units(const char *s, int *out, int maxn) {
     // returns count parsed; expects "a,b,c"
@@ -73,8 +85,9 @@ int main(int argc, char **argv) {
         unsigned seed = 1337;
         const char *dataset = "xor";
         int layers_hidden = 1;
-        int units_arr[8] = {4};  // default one hidden layer with 4 units
+        int units_arr[8] = {4};
         int units_cnt = 1;
+        float val_frac = 0.0f;
         const char *out_path = NULL;
 
         for (int a = 2; a < argc; ++a) {
@@ -84,62 +97,106 @@ int main(int argc, char **argv) {
             else if (!strcmp(argv[a], "--dataset") && a+1 < argc) { dataset = argv[++a]; }
             else if (!strcmp(argv[a], "--layers") && a+1 < argc) { layers_hidden = atoi(argv[++a]); }
             else if (!strcmp(argv[a], "--units") && a+1 < argc) { units_cnt = parse_units(argv[++a], units_arr, 8); }
-            else if (!strcmp(argv[a], "--out") && a+1 < argc) { out_path = argv[++a]; }
+            else if (!strcmp(argv[a], "--val") && a+1 < argc)    { val_frac = (float)atof(argv[++a]); }
+            else if (!strcmp(argv[a], "--out") && a+1 < argc)    { out_path = argv[++a]; }
+            else if (!strcmp(argv[a], "--help")) { usage(); return 0; }
         }
+        if (strcmp(dataset, "xor") != 0) { fprintf(stderr, "Only --dataset xor supported now.\n"); return 1; }
+        if (units_cnt != layers_hidden) { fprintf(stderr, "units count (%d) must match --layers (%d)\n", units_cnt, layers_hidden); return 1; }
+        if (val_frac < 0.0f) val_frac = 0.0f; if (val_frac > 0.9f) val_frac = 0.9f;
 
-        if (strcmp(dataset, "xor") != 0) {
-            fprintf(stderr, "Only --dataset xor is supported at this step.\n");
-            return 1;
-        }
-        if (units_cnt != layers_hidden) {
-            fprintf(stderr, "units count (%d) must match --layers (%d)\n", units_cnt, layers_hidden);
-            return 1;
-        }
-
-        printf("[train] ds=%s epochs=%d lr=%.4f seed=%u layers=%d units=",
-            dataset, epochs, lr, seed, layers_hidden);
+        printf("[train] ds=%s layers=%d units=", dataset, layers_hidden);
         for (int i=0;i<units_cnt;i++) printf("%s%d", (i?",":""), units_arr[i]);
-        puts("");
+        printf(" epochs=%d lr=%.4f seed=%u val=%.2f\n", epochs, lr, seed, val_frac);
 
-        // Train with flexible MLP
+        // Dataset + fixed split
         Dataset d = load_dataset("xor");
-        MLP m = {0};
+        if (d.n <= 0) { fprintf(stderr, "dataset load failed\n"); return 1; }
+
+        int idx_all[64]; // plenty for tiny sets; grow when adding bigger loaders
+        for (int i = 0; i < d.n; ++i) idx_all[i] = i;
+        shuffle_indices(idx_all, d.n, seed);
+
+        int n_val = (int)floorf(val_frac * (float)d.n);
+        if (n_val < 0) n_val = 0;
+        if (n_val > d.n - 1) n_val = d.n - 1; // keep at least 1 train example
+        int n_train = d.n - n_val;
+
+        int *idx_val   = idx_all;          // first n_val
+        int *idx_train = idx_all + n_val;  // remainder
+
+        // Model + grads
+        MLP m = (MLP){0};
         if (mlp_init(&m, /*d_in=*/2, /*d_out=*/2, units_arr, units_cnt, seed) != 0) {
             fprintf(stderr, "mlp_init failed\n"); return 1;
         }
-
-        // Grad buffers aligned to layers
         Tensor *dW = (Tensor*)malloc(m.L * sizeof(Tensor));
         Tensor *db = (Tensor*)malloc(m.L * sizeof(Tensor));
         for (int l=0;l<m.L;l++){ dW[l]=tensor_alloc(m.W[l].rows,m.W[l].cols); db[l]=tensor_alloc(1,m.b[l].cols); }
 
-        Tensor x = tensor_alloc(1, 2);
-        Tensor logits = tensor_alloc(1, 2);
+        Tensor x = tensor_alloc(1, m.d_in);
+        Tensor logits = tensor_alloc(1, m.d_out);
 
-        int idx[4] = {0,1,2,3};
+        double t0 = now_ms();
         for (int e = 1; e <= epochs; ++e) {
-            shuffle_indices(idx, d.n, seed + (unsigned)e);
-            int correct = 0;
+            double e0 = now_ms();
+
+            // shuffle train indices only (fixed val set)
+            shuffle_indices(idx_train, n_train, seed + (unsigned)e);
+
+            int correct_train = 0;
             float loss_sum = 0.0f;
 
-            for (int t = 0; t < d.n; ++t) {
-                int i = idx[t];
+            // train loop
+            for (int t = 0; t < n_train; ++t) {
+                int i = idx_train[t];
                 x.data[0] = d.X[2*i+0];
                 x.data[1] = d.X[2*i+1];
                 int y = d.y[i];
 
                 mlp_forward_logits(&m, &x, &logits);
-                loss_sum += cross_entropy_from_logits(&logits, y);
-                if (argmax(&logits) == y) correct++;
+                float L = cross_entropy_from_logits(&logits, y);
+                loss_sum += L;
+
+                if (argmax(&logits) == y) correct_train++;
 
                 mlp_backward_from_logits(&m, &x, y, dW, db, /*alpha=*/0.1f);
                 mlp_sgd_step(&m, dW, db, lr);
             }
 
-            float acc = (float)correct / (float)d.n;
-            printf("[epoch %3d] loss=%.6f acc=%.2f%%\n", e, loss_sum/(float)d.n, acc*100.0f);
-            if (acc >= 0.95f) { puts("[train] reached >=95% accuracy — stopping early."); break; }
+            // validation (if any)
+            int correct_val = 0;
+            if (n_val > 0) {
+                for (int t = 0; t < n_val; ++t) {
+                    int i = idx_val[t];
+                    x.data[0] = d.X[2*i+0];
+                    x.data[1] = d.X[2*i+1];
+                    int y = d.y[i];
+                    mlp_forward_logits(&m, &x, &logits);
+                    if (argmax(&logits) == y) correct_val++;
+                }
+            }
+
+            double e_ms = now_ms() - e0;
+            float acc_tr = (float)correct_train / (float)n_train;
+            float acc_va = (n_val>0) ? ((float)correct_val / (float)n_val) : NAN;
+
+            if (n_val > 0) {
+                printf("[epoch %3d] loss=%.6f acc=%.2f%% val=%.2f%% time=%.1fms\n",
+                    e, loss_sum/(float)n_train, acc_tr*100.0f, acc_va*100.0f, e_ms);
+            } else {
+                printf("[epoch %3d] loss=%.6f acc=%.2f%% time=%.1fms\n",
+                    e, loss_sum/(float)n_train, acc_tr*100.0f, e_ms);
+            }
+
+            if (acc_tr >= 0.95f && (n_val == 0 || acc_va >= 0.95f)) {
+                puts("[train] reached >=95% accuracy — stopping early.");
+                break;
+            }
         }
+        double t_ms = now_ms() - t0;
+
+        printf("[train] total time: %.1fms\n", t_ms);
 
         if (out_path) {
             if (io_save_mlp(&m, out_path) == 0) {
