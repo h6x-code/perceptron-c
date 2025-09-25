@@ -17,12 +17,25 @@ static void usage(void) {
          "\nDefaults: --layers 1 --units 128 --epochs 10 --lr 0.01 --batch 32 --seed 1337");
 }
 
-// Helpers
 static void clip_inplace(float *g, int n, float limit) {
     for (int i = 0; i < n; ++i) {
         if (g[i] >  limit) g[i] =  limit;
         if (g[i] < -limit) g[i] = -limit;
     }
+}
+
+// Scale tensor data in-place from [-1,1] to [-a, a]
+static void tensor_scale_range(Tensor *t, float a) {
+    int n = t->rows * t->cols;
+    for (int i = 0; i < n; ++i) t->data[i] *= a;
+}
+
+// He-uniform initializer for a (fan_in x fan_out) weight matrix
+static void he_uniform_init(Tensor *W, int fan_in, unsigned seed) {
+    // Start from uniform in [-1,1], then scale to [-sqrt(6/fan_in), +sqrt(6/fan_in)]
+    tensor_randu(W, seed);
+    float a = sqrtf(6.0f / (float)fan_in);
+    tensor_scale_range(W, a);
 }
 
 // tiny deterministic RNG for shuffling (LCG)
@@ -61,11 +74,17 @@ static void train_xor(int epochs, float lr, unsigned seed) {
     Tensor W2 = tensor_alloc(2, 2);
     Tensor b2 = tensor_alloc(1, 2);
 
-    // Deterministic small init in [-0.5, 0.5]
-    tensor_randu(&W1, seed); for (int i=0;i<4;i++) W1.data[i] *= 0.5f;
-    tensor_randu(&W2, seed+1); for (int i=0;i<4;i++) W2.data[i] *= 0.5f;
-    b1.data[0] = 0.2f; b1.data[1] = -0.3f;   // away from ReLU kink
-    b2.data[0] = 0.0f; b2.data[1] = 0.0f;
+    // New: He-uniform for ReLU layers
+    he_uniform_init(&W1, /*fan_in=*/2, seed);
+    he_uniform_init(&W2, /*fan_in=*/2, seed + 1);
+
+    // New: small positive biases for hidden ReLU to avoid dead units
+    b1.data[0] = 0.10f;
+    b1.data[1] = 0.10f;
+
+    // Output biases can be zero
+    b2.data[0] = 0.0f;
+    b2.data[1] = 0.0f;
 
     // Grad buffers
     Tensor dW1 = tensor_alloc(2, 2);
@@ -103,10 +122,10 @@ static void train_xor(int epochs, float lr, unsigned seed) {
             // Forward: z1 -> a1 -> z2
             dense_forward(&x, &W1, &b1, &z1);
 
-            // a1 = ReLU(z1); (copy z1 to a1 then relu)
+            // a1 = LeakyReLU(z1)
             for (int k = 0; k < 2; ++k) a1.data[k] = z1.data[k];
-            relu_inplace(&a1);
-
+            leaky_relu_inplace(&a1, 0.1f);
+;
             dense_forward(&a1, &W2, &b2, &z2);
 
             // Loss and accuracy
@@ -127,8 +146,8 @@ static void train_xor(int epochs, float lr, unsigned seed) {
             softmax_ce_backward_from_logits(&z2, y, &dz2);
             dense_backward(&a1, &W2, &dz2, &da1, &dW2, &db2);
 
-            // Backward: ReLU (use pre-activation z1 for mask), then to x
-            relu_backward_inplace(&z1, &da1);
+            // Backward: LeakyReLU (use pre-activation z1)
+            leaky_relu_backward_inplace(&z1, &da1, 0.1f);
             dense_backward(&x, &W1, &da1, &dx, &dW1, &db1);
 
             // Clip grads to avoid blow-ups on rare outliers

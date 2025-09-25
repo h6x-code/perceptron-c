@@ -27,6 +27,14 @@ void relu_inplace(Tensor *t) {
     }
 }
 
+void leaky_relu_inplace(Tensor *t, float alpha) {
+    int n = t->rows * t->cols;
+    for (int i = 0; i < n; i++) {
+        float v = t->data[i];
+        t->data[i] = (v > 0.0f) ? v : alpha * v;
+    }
+}
+
 // In-place softmax with numerical stability
 void softmax_inplace(Tensor *t) {
     int n = t->rows * t->cols;
@@ -119,6 +127,15 @@ void relu_backward_inplace(const Tensor *activation, Tensor *dactivation) {
         if (a[i] <= 0.0f) {
             da[i] = 0.0f;
         }
+    }
+}
+
+void leaky_relu_backward_inplace(const Tensor *preact, Tensor *dact, float alpha) {
+    int n = preact->rows * preact->cols;
+    const float *z = preact->data;
+    float *g = dact->data;
+    for (int i = 0; i < n; i++) {
+        g[i] *= (z[i] > 0.0f) ? 1.0f : alpha;
     }
 }
 

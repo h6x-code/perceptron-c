@@ -4,6 +4,7 @@
 // Existing forward APIs
 void dense_forward(const Tensor *x, const Tensor *W, const Tensor *b, Tensor *out);
 void relu_inplace(Tensor *t);
+void leaky_relu_inplace(Tensor *t, float alpha);
 void softmax_inplace(Tensor *t);
 
 // loss helpers (logits-based)
@@ -17,6 +18,7 @@ void softmax_ce_backward_from_logits(const Tensor *logits, int true_label, Tenso
 // In-place ReLU backward: zero grad where pre-activation <= 0
 // 'activation' is expected to be the PRE-activation (z), not the post-ReLU output.
 void relu_backward_inplace(const Tensor *activation, Tensor *dactivation);
+void leaky_relu_backward_inplace(const Tensor *preact, Tensor *dact, float alpha);
 
 // Dense backward: x(1xd), W(dxm), dout(1xm) -> dx(1xd), dW(dxm), db(1xm)
 void dense_backward(const Tensor *x, const Tensor *W, const Tensor *dout,
