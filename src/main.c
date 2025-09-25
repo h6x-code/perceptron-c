@@ -1,4 +1,5 @@
 #include <math.h>
+#include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -10,6 +11,11 @@
 #include "nn_model.h"
 #include "opt.h"
 #include "tensor.h"
+#include "thread.h"
+
+// Forward declarations to avoid implicit decls:
+static int argmax(const Tensor *t);
+static void usage(void);
 
 static void usage(void) {
     puts("perceptron usage:");
@@ -30,6 +36,61 @@ typedef struct {
     float *conf;
 } PredCtx;
 
+// Multithreading structs
+typedef struct {
+    MLPWS ws;
+    Tensor x, logits;
+    Tensor *dW_local, *db_local; // arrays of length m.L
+    float loss; int correct;
+} ThreadSlot;
+
+typedef struct {
+    int start, end, t0;              // shard in current batch
+    const int *idx;
+    const Dataset *d;
+    const MLP *m;
+    ThreadSlot *slot;
+} Slice;
+
+// Multithreading helpers
+static void alloc_param_like(const MLP *m, Tensor **dW, Tensor **db) {
+    *dW = (Tensor*)malloc((size_t)m->L * sizeof(Tensor));
+    *db = (Tensor*)malloc((size_t)m->L * sizeof(Tensor));
+    for (int l = 0; l < m->L; ++l) {
+        (*dW)[l] = tensor_alloc(m->W[l].rows, m->W[l].cols);
+        (*db)[l] = tensor_alloc(1, m->b[l].cols);
+    }
+}
+
+static void zero_param_stack(Tensor *dW, Tensor *db, int L) {
+    for (int l = 0; l < L; ++l) { tensor_zero(&dW[l]); tensor_zero(&db[l]); }
+}
+
+static void free_param_stack(Tensor *dW, Tensor *db, int L) {
+    for (int l = 0; l < L; ++l) { tensor_free(&dW[l]); tensor_free(&db[l]); }
+    free(dW); free(db);
+}
+
+static void* train_slice_run(void *arg) {
+    Slice *s = (Slice*)arg;
+    ThreadSlot *S = s->slot;
+    S->loss = 0.0f; S->correct = 0;
+    zero_param_stack(S->dW_local, S->db_local, S->ws.L);
+
+    for (int u = s->start; u < s->end; ++u) {
+        int i = s->idx[s->t0 + u];
+        const float *row = &s->d->X[(size_t)i * (size_t)s->d->d];
+        for (int j = 0; j < s->m->d_in; ++j) S->x.data[j] = row[j];
+        int y = s->d->y[i];
+
+        mlp_forward_logits_ws(s->m, &S->x, &S->logits, &S->ws);
+        S->loss += cross_entropy_from_logits(&S->logits, y);
+        if (argmax(&S->logits) == y) S->correct++;
+
+        mlp_backward_from_logits_ws(s->m, y, &S->ws, S->dW_local, S->db_local, 0.1f);
+    }
+    return NULL;
+}
 
 // Misc helpers
 static double now_ms(void) {
@@ -248,6 +309,16 @@ int main(int argc, char **argv) {
             fprintf(stderr, "mlp_init failed\n"); dataset_free(&d); return 1;
         }
 
+        // Allocate per-thread slots
+        int T = threads;
+        ThreadSlot *th = (ThreadSlot*)calloc((size_t)T, sizeof(ThreadSlot));
+        for (int t = 0; t < T; ++t) {
+            mlpws_init(&th[t].ws, &m);
+            th[t].x      = tensor_alloc(1, m.d_in);
+            th[t].logits = tensor_alloc(1, m.d_out);
+            alloc_param_like(&m, &th[t].dW_local, &th[t].db_local);
+        }
+
         // Grad buffers aligned to layers
         Tensor *dW = (Tensor*)malloc(m.L * sizeof(Tensor));
         Tensor *db = (Tensor*)malloc(m.L * sizeof(Tensor));
@@ -290,45 +361,51 @@ int main(int argc, char **argv) {
             int correct_train = 0;
             float loss_sum = 0.0f;
 
-            // train loop (mini-batches)
+            // train loop (multi-threading)
             for (int t0 = 0; t0 < n_train; t0 += batch) {
-                int B = batch;
-                if (t0 + B > n_train) B = n_train - t0;
+                int B = batch; if (t0 + B > n_train) B = n_train - t0;
+                int TT = T; if (TT > B) TT = B;
 
-                zero_grads(dW, db, m.L);  // accumulate grads over the batch
-                int correct_batch = 0;
-                float loss_batch = 0.0f;
-
-                for (int b = 0; b < B; ++b) {
-                    int i = idx_train[t0 + b];
-                    const float *row = &d.X[(size_t)i * (size_t)d.d];
-                    for (int j = 0; j < d.d; ++j) x.data[j] = row[j];
-                    int y = d.y[i];
-
-                    mlp_forward_logits(&m, &x, &logits);
-                    loss_batch += cross_entropy_from_logits(&logits, y);
-                    if (argmax(&logits) == y) correct_batch++;
-
-                    // backward into temp grads (reusing dW/db as accumulators)
-                    mlp_backward_from_logits(&m, &x, y, dW, db, /*alpha=*/0.1f);
+                // partition [0,B) → TT slices
+                int base = B / TT, rem = B % TT, cur = 0;
+                Slice *S = (Slice*)malloc((size_t)TT * sizeof(Slice));
+                pthread_t *pth = (pthread_t*)malloc((size_t)TT * sizeof(pthread_t));
+                for (int t = 0; t < TT; ++t) {
+                    int len = base + (t < rem ? 1 : 0);
+                    S[t] = (Slice){ .start=cur, .end=cur+len, .t0=t0, .idx=idx_train, .d=&d, .m=&m, .slot=&th[t] };
+                    cur += len;
+                    pthread_create(&pth[t], NULL, train_slice_run, &S[t]);
                 }
+                for (int t = 0; t < TT; ++t) pthread_join(pth[t], NULL);
 
-                // average gradients
-                float invB = 1.0f / (float)B;
+                // reduce grads from thread-local accumulators
+                Tensor *dW = NULL, *db = NULL; alloc_param_like(&m, &dW, &db); zero_param_stack(dW, db, m.L);
+                for (int t = 0; t < TT; ++t) {
+                    for (int l = 0; l < m.L; ++l) {
+                        int nW = m.W[l].rows * m.W[l].cols, nb = m.b[l].cols;
+                        for (int i = 0; i < nW; ++i) dW[l].data[i] += th[t].dW_local[l].data[i];
+                        for (int j = 0; j < nb; ++j) db[l].data[j] += th[t].db_local[l].data[j];
+                    }
+                }
+                // average by B
+                const float invB = 1.0f / (float)B;
                 for (int l = 0; l < m.L; ++l) {
-                    int nW = dW[l].rows * dW[l].cols;
-                    int nb = db[l].cols;
+                    int nW = dW[l].rows * dW[l].cols, nb = db[l].cols;
                     for (int i = 0; i < nW; ++i) dW[l].data[i] *= invB;
                     for (int j = 0; j < nb; ++j) db[l].data[j] *= invB;
                 }
 
-                // parameter update
+                // single optimizer step
                 if (use_momentum) sgd_momentum_step(&optm, m.W, m.b, dW, db, lr);
-                else              sgd_step_params(m.W, m.b, dW, db, m.L, lr);
+                else              sgd_step_params  (m.W, m.b, dW, db, m.L, lr);
 
-                // accumulate epoch stats (optional)
-                correct_train += correct_batch;
-                loss_sum      += loss_batch;
+                // batch stats
+                int corr = 0; float lsum = 0.0f;
+                for (int t = 0; t < TT; ++t) { corr += th[t].correct; lsum += th[t].loss; }
+                correct_train += corr; loss_sum += lsum;
+
+                free_param_stack(dW, db, m.L);
+                free(pth); free(S);
             }
 
             // validation (if any)
@@ -416,6 +493,15 @@ int main(int argc, char **argv) {
         if (use_momentum) sgd_momentum_free(&optm);
         if (bestW) { free_params(bestW, bestB, m.L); }
 
+        // Free multithreading
+        for (int t = 0; t < T; ++t) {
+            free_param_stack(th[t].dW_local, th[t].db_local, m.L);
+            tensor_free(&th[t].logits);
+            tensor_free(&th[t].x);
+            mlpws_free(&th[t].ws);
+        }
+        free(th);
+
 
         // free indices + dataset
         free(idx_all);
@@ -427,19 +513,27 @@ int main(int argc, char **argv) {
 
     if (strcmp(argv[1], "predict") == 0) {
         const char *model_path = NULL;
-        const char *input_spec = NULL;
+        const char *input_spec = NULL;   // still supports csv:...
         int csv_has_header = 0;
+        int threads = 1;
+
+        // MNIST IDX flags
+        const char *mnist_images = NULL;
+        const char *mnist_labels = NULL;
+        int limit = 0; // 0 = no limit
 
         for (int a = 2; a < argc; ++a) {
-            if (!strcmp(argv[a], "--model") && a+1 < argc) { model_path = argv[++a]; }
-            else if (!strcmp(argv[a], "--input") && a+1 < argc) { input_spec = argv[++a]; }
-            else if (!strcmp(argv[a], "--csv-has-header")) { csv_has_header = 1; }
-            else if (!strcmp(argv[a], "--help")) { print_usage(); return 0; }
+            if      (!strcmp(argv[a], "--model") && a+1 < argc)         { model_path = argv[++a]; }
+            else if (!strcmp(argv[a], "--input") && a+1 < argc)         { input_spec = argv[++a]; }
+            else if (!strcmp(argv[a], "--csv-has-header"))              { csv_has_header = 1; }
+            else if (!strcmp(argv[a], "--threads") && a+1 < argc)       { threads = atoi(argv[++a]); if (threads < 1) threads = 1; }
+            // NEW:
+            else if (!strcmp(argv[a], "--mnist-images") && a+1 < argc)  { mnist_images = argv[++a]; }
+            else if (!strcmp(argv[a], "--mnist-labels") && a+1 < argc)  { mnist_labels = argv[++a]; }
+            else if (!strcmp(argv[a], "--limit") && a+1 < argc)         { limit = atoi(argv[++a]); if (limit < 0) limit = 0; }
+            else if (!strcmp(argv[a], "--help")) { usage(); return 0; }
         }
-        if (!model_path || !input_spec) {
-            fprintf(stderr, "predict: require --model and --input\n");
-            return 1;
-        }
+        if (!model_path) { fprintf(stderr, "predict: require --model\n"); return 1; }
 
         // Load model
         MLP m = {0};
@@ -450,50 +544,76 @@ int main(int argc, char **argv) {
 
         // Load inputs
         Dataset din = {0};
-        if (!strncmp(input_spec, "csv:", 4)) {
+        int have_csv = (input_spec && !strncmp(input_spec, "csv:", 4));
+        int have_mnist = (mnist_images != NULL);
+
+        if (have_csv && have_mnist) {
+            fprintf(stderr, "[predict] choose EITHER --input csv:... OR --mnist-images/--mnist-labels\n");
+            mlp_free(&m); return 1;
+        }
+
+        if (have_csv) {
             const char *path = input_spec + 4;
             int rc = dataset_load_csv_features(path, csv_has_header, &din);
             if (rc != 0) { fprintf(stderr, "[predict] CSV load failed (%d): %s\n", rc, path); mlp_free(&m); return 1; }
+        } else if (have_mnist) {
+            if (!mnist_labels) {
+                fprintf(stderr, "[predict] for MNIST, provide both --mnist-images and --mnist-labels\n");
+                mlp_free(&m); return 1;
+            }
+            int rc = dataset_load_mnist_idx(mnist_images, mnist_labels, limit, &din);
+            if (rc != 0) {
+                fprintf(stderr, "[predict] MNIST IDX load failed (%d): images=%s labels=%s\n", rc, mnist_images, mnist_labels);
+                mlp_free(&m); return 1;
+            }
         } else {
-            fprintf(stderr, "[predict] unsupported input spec: %s\n", input_spec);
-            mlp_free(&m);
-            return 1;
+            fprintf(stderr, "[predict] provide --input csv:... OR --mnist-images/--mnist-labels\n");
+            mlp_free(&m); return 1;
         }
 
         if (din.d != m.d_in) {
-            fprintf(stderr, "[predict] feature dim mismatch: model d_in=%d, csv d=%d\n", m.d_in, din.d);
+            fprintf(stderr, "[predict] feature dim mismatch: model d_in=%d, input d=%d\n", m.d_in, din.d);
             dataset_free(&din); mlp_free(&m); return 1;
         }
 
-        // Inference
-        Tensor x = tensor_alloc(1, m.d_in);
-        Tensor logits = tensor_alloc(1, m.d_out);
-        printf("[predict] n=%d d=%d -> k=%d\n", din.n, din.d, m.d_out);
 
-        for (int i = 0; i < din.n; ++i) {
-            const float *row = &din.X[(size_t)i * (size_t)din.d];
-            for (int j = 0; j < din.d; ++j) x.data[j] = row[j];
+        // Threaded inference
+        const int n = din.n;
+        if (threads > n) threads = n > 0 ? n : 1;
 
-            mlp_forward_logits(&m, &x, &logits);
+        int   *pred  = (int*)  malloc((size_t)n * sizeof(int));
+        float *conf  = (float*)malloc((size_t)n * sizeof(float));
+        if (!pred || !conf) { fprintf(stderr, "[predict] OOM\n"); free(pred); free(conf); dataset_free(&din); mlp_free(&m); return 1; }
 
-            // softmax
-            float mx = logits.data[0]; for (int k = 1; k < m.d_out; ++k) if (logits.data[k] > mx) mx = logits.data[k];
-            float sum = 0.f; for (int k = 0; k < m.d_out; ++k) { logits.data[k] = expf(logits.data[k] - mx); sum += logits.data[k]; }
-            for (int k = 0; k < m.d_out; ++k) logits.data[k] /= sum;
+        PredCtx ctx = { .m = &m, .din = &din, .pred = pred, .conf = conf };
 
-            // argmax
-            int pred = 0; float bestp = logits.data[0];
-            for (int k = 1; k < m.d_out; ++k) if (logits.data[k] > bestp) { bestp = logits.data[k]; pred = k; }
+        printf("[predict] n=%d d=%d -> k=%d threads=%d\n", din.n, din.d, m.d_out, threads);
 
-            printf("%d,%.6f\n", pred, bestp);
+        if (parallel_for(n, threads, predict_range, &ctx) != 0) {
+            fprintf(stderr, "[predict] threading failed\n");
+            free(conf); free(pred); dataset_free(&din); mlp_free(&m); return 1;
         }
 
-        // cleanup
-        tensor_free(&logits);
-        tensor_free(&x);
+        int correct = 0;
+        for (int i = 0; i < n; ++i) {
+            printf("%d,%.6f", pred[i], conf[i]);
+            if (din.y) { // labels present (MNIST path)
+                printf(",%d", din.y[i]);
+                if (pred[i] == din.y[i]) correct++;
+            }
+            printf("\n");
+        }
+        if (din.y) {
+            float acc = (n > 0) ? (100.0f * (float)correct / (float)n) : 0.0f;
+            fprintf(stderr, "[predict] accuracy=%.2f%% (%d/%d)\n", acc, correct, n);
+        }
+
+        free(conf);
+        free(pred);
         dataset_free(&din);
         mlp_free(&m);
         return 0;
+
     }
 
 

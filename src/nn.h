@@ -24,6 +24,10 @@ void leaky_relu_backward_inplace(const Tensor *preact, Tensor *dact, float alpha
 void dense_backward(const Tensor *x, const Tensor *W, const Tensor *dout,
                     Tensor *dx, Tensor *dW, Tensor *db);
 
+// Accumulate parameter grads (+=) and compute dx; no temporaries allocated.
+void dense_backward_accum(const Tensor *a, const Tensor *W, const Tensor *dout,
+                          Tensor *dx, Tensor *dW_acc, Tensor *db_acc);
+
 // Tiny demos/tests
 void nn_test(void);
 

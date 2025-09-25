@@ -167,6 +167,29 @@ void dense_backward(const Tensor *x, const Tensor *W, const Tensor *dout,
     }
 }
 
+void dense_backward_accum(const Tensor *a, const Tensor *W, const Tensor *dout,
+                          Tensor *dx, Tensor *dW_acc, Tensor *db_acc)
+{
+    const int d_in  = W->rows;
+    const int d_out = W->cols;
+
+    // dx = dout @ W^T
+    for (int i = 0; i < d_in; ++i) {
+        float s = 0.0f;
+        for (int j = 0; j < d_out; ++j) s += dout->data[j] * W->data[i*d_out + j];
+        dx->data[i] = s;
+    }
+
+    // dW += a^T @ dout
+    for (int i = 0; i < d_in; ++i) {
+        const float ai = a->data[i];
+        for (int j = 0; j < d_out; ++j) dW_acc->data[i*d_out + j] += ai * dout->data[j];
+    }
+
+    // db += dout
+    for (int j = 0; j < d_out; ++j) db_acc->data[j] += dout->data[j];
+}
+
 // Tiny test function for forward pass
 void nn_test(void) {
     Tensor x = tensor_alloc(1, 2);

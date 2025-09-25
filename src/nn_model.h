@@ -16,11 +16,20 @@ typedef struct {
     Tensor *a;    // activations   (1 x dims[l+1]), with a[0] used as 1xd_in copy of input
 } MLP;
 
+// Per-thread workspace (forward caches + backward scratch)
+typedef struct {
+    int L;
+    Tensor *a;    // L+1, a[0]=x
+    Tensor *z;    // L
+    Tensor *dx;   // L, backprop signals sized like layer inputs
+    Tensor dcur;  // 1×d_out, top gradient buffer
+} MLPWS;
+
 int  mlp_init(MLP *m, int d_in, int d_out, const int *hidden, int n_hidden, unsigned seed);
 void mlp_free(MLP *m);
 
 // Forward: compute logits for a single sample x(1 x d_in) into out(1 x d_out)
-void mlp_forward_logits(MLP *m, const Tensor *x, Tensor *out);
+void mlp_forward_logits(const MLP *m, const Tensor *x, Tensor *out);
 
 // Backward from logits + label, producing per-layer grads (provided as arrays)
 void mlp_backward_from_logits(MLP *m, const Tensor *x, int y,
@@ -31,3 +40,11 @@ void he_uniform_init(Tensor *W, int fan_in, unsigned seed);
 
 // Simple SGD step over all layers
 void mlp_sgd_step(MLP *m, Tensor *dW, Tensor *db, float lr);
+
+int  mlpws_init(MLPWS *ws, const MLP *m);
+void mlpws_free(MLPWS *ws);
+
+// Re-entrant forward/backward (never touches m->a/m->z)
+void mlp_forward_logits_ws(const MLP *m, const Tensor *x, Tensor *out, MLPWS *ws);
+void mlp_backward_from_logits_ws(const MLP *m, int y, MLPWS *ws, Tensor *dW_acc, Tensor *db_acc, float leaky_alpha);
+

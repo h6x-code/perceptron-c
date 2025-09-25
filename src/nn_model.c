@@ -4,6 +4,7 @@
 #include <string.h>
 #include <math.h>
 
+
 static void tensor_scale_range(Tensor *t, float a) {
     int n = t->rows * t->cols;
     for (int i = 0; i < n; ++i) t->data[i] *= a;
@@ -76,7 +77,7 @@ void mlp_free(MLP *m) {
     memset(m, 0, sizeof(*m));
 }
 
-void mlp_forward_logits(MLP *m, const Tensor *x, Tensor *out) {
+void mlp_forward_logits(const MLP *m, const Tensor *x, Tensor *out) {
     // a[0] = x
     for (int i = 0; i < m->d_in; ++i) m->a[0].data[i] = x->data[i];
 
@@ -124,5 +125,57 @@ void mlp_sgd_step(MLP *m, Tensor *dW, Tensor *db, float lr) {
         int nb = m->b[l].cols;
         for (int i = 0; i < nW; ++i) m->W[l].data[i] -= lr * dW[l].data[i];
         for (int j = 0; j < nb; ++j) m->b[l].data[j] -= lr * db[l].data[j];
+    }
+}
+
+int mlpws_init(MLPWS *ws, const MLP *m) {
+    ws->L = m->L;
+    ws->a  = (Tensor*)malloc((size_t)(m->L + 1) * sizeof(Tensor));
+    ws->z  = (Tensor*)malloc((size_t)(m->L)     * sizeof(Tensor));
+    ws->dx = (Tensor*)malloc((size_t)(m->L)     * sizeof(Tensor));
+    if (!ws->a || !ws->z || !ws->dx) { free(ws->a); free(ws->z); free(ws->dx); return 1; }
+
+    ws->a[0] = tensor_alloc(1, m->d_in);
+    for (int l = 0; l < m->L; ++l) {
+        const int h = m->dims[l+1];
+        ws->z[l]  = tensor_alloc(1, h);
+        ws->a[l+1]= tensor_alloc(1, h);
+        ws->dx[l] = tensor_alloc(1, m->dims[l]);
+    }
+    ws->dcur = tensor_alloc(1, m->d_out);
+    return 0;
+}
+
+void mlpws_free(MLPWS *ws) {
+    if (!ws) return;
+    for (int l = 0; l < ws->L; ++l) { tensor_free(&ws->z[l]); tensor_free(&ws->a[l+1]); tensor_free(&ws->dx[l]); }
+    tensor_free(&ws->a[0]);
+    tensor_free(&ws->dcur);
+    free(ws->z); free(ws->a); free(ws->dx);
+    ws->z = ws->a = ws->dx = NULL; ws->L = 0;
+}
+
+void mlp_forward_logits_ws(const MLP *m, const Tensor *x, Tensor *out, MLPWS *ws) {
+    for (int i = 0; i < m->d_in; ++i) ws->a[0].data[i] = x->data[i];
+    for (int l = 0; l < m->L; ++l) {
+        dense_forward(&ws->a[l], &m->W[l], &m->b[l], &ws->z[l]);
+        if (l == m->L - 1) {
+            for (int j = 0; j < m->d_out; ++j) out->data[j] = ws->z[l].data[j];
+        } else {
+            for (int j = 0; j < m->dims[l+1]; ++j) ws->a[l+1].data[j] = ws->z[l].data[j];
+            leaky_relu_inplace(&ws->a[l+1], 0.1f);
+        }
+    }
+}
+
+void mlp_backward_from_logits_ws(const MLP *m, int y, MLPWS *ws,
+                                 Tensor *dW_acc, Tensor *db_acc, float leaky_alpha)
+{
+    softmax_ce_backward_from_logits(&ws->z[m->L - 1], y, &ws->dcur); // dcur = dL/dz^L
+
+    for (int l = m->L - 1; l >= 0; --l) {
+        const Tensor *dout = (l == m->L - 1) ? &ws->dcur : &ws->dx[l+1];
+        dense_backward_accum(&ws->a[l], &m->W[l], dout, &ws->dx[l], &dW_acc[l], &db_acc[l]);
+        if (l > 0) leaky_relu_backward_inplace(&ws->z[l-1], &ws->dx[l], leaky_alpha);
     }
 }

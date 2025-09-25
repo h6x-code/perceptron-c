@@ -2,11 +2,7 @@
 #include <pthread.h>
 #include <stdlib.h>
 
-typedef struct {
-    int start, end;
-    ParForBody body;
-    void *ctx;
-} Task;
+typedef struct { int start, end; ParForBody body; void *ctx; } Task;
 
 static void *worker(void *arg) {
     Task *t = (Task*)arg;
@@ -25,14 +21,11 @@ int parallel_for(int n, int num_threads, ParForBody body, void *ctx) {
     int base = n / num_threads, rem = n % num_threads, cur = 0;
     for (int t = 0; t < num_threads; ++t) {
         int len = base + (t < rem ? 1 : 0);
-        tsk[t].start = cur;
-        tsk[t].end   = cur + len;
-        tsk[t].body  = body;
-        tsk[t].ctx   = ctx;
+        tsk[t] = (Task){ .start = cur, .end = cur + len, .body = body, .ctx = ctx };
         cur += len;
         pthread_create(&ths[t], NULL, worker, &tsk[t]);
     }
     for (int t = 0; t < num_threads; ++t) pthread_join(ths[t], NULL);
-    free(ths); free(tsk);
+    free(tsk); free(ths);
     return 0;
 }
