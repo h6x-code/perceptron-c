@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "data.h"
 #include "tensor.h"
@@ -28,11 +29,13 @@ int main(int argc, char **argv) {
         puts("[predict] subcommand recognized (flags parsed later).");
         return 0;
     }
-    if (strcmp(argv[1], "tensor-test") == 0) {           // dev subcommand
+    if (strcmp(argv[1], "tensor-test") == 0) {
+        if (argc < 3) { fprintf(stderr, "usage: ./perceptron tensor-test <seed>\n"); return 2; }
+        unsigned seed = (unsigned)strtoul(argv[2], NULL, 10);
         Tensor t = tensor_alloc(2, 3);
         tensor_zero(&t); float s0=0; for(int i=0;i<6;i++) s0 += t.data[i];
-        tensor_randu(&t, 1337); float s1=0; for(int i=0;i<6;i++) s1 += t.data[i];
-        printf("[tensor] 2x3 sum_zero=%.1f sum_rand=%.3f\n", s0, s1);
+        tensor_randu(&t, seed); float s1=0; for(int i=0;i<6;i++) s1 += t.data[i];
+        printf("[tensor] seed=%u sum_zero=%.1f sum_rand=%.6f\n", seed, s0, s1);
         tensor_free(&t); return 0;
     }
     fprintf(stderr, "error: unknown subcommand '%s'\n", argv[1]);
