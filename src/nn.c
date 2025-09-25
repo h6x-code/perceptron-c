@@ -51,6 +51,38 @@ void softmax_inplace(Tensor *t) {
     }
 }
 
+// Compute log-sum-exp over a 1xK logits tensor.
+float logsumexp(const Tensor *logits) {
+    int n = logits->rows * logits->cols;  // expect 1xK here
+    const float *z = logits->data;
+
+    // Find max for numerical stability
+    float m = z[0];
+    for (int i = 1; i < n; i++) {
+        if (z[i] > m) m = z[i];
+    }
+
+    // Sum exp(z_i - m)
+    float sum = 0.0f;
+    for (int i = 0; i < n; i++) {
+        sum += expf(z[i] - m);
+    }
+
+    return m + logf(sum);
+}
+
+// Cross-entropy from raw logits and an integer label (0..K-1).
+float cross_entropy_from_logits(const Tensor *logits, int true_label) {
+    int n = logits->rows * logits->cols;  // expect 1xK
+    if (true_label < 0 || true_label >= n) {
+        // In a full system we’d handle this more gracefully; keep simple here.
+        return NAN;
+    }
+    const float *z = logits->data;
+    float lse = logsumexp(logits);
+    return -z[true_label] + lse;
+}
+
 // Tiny test function for forward pass
 void nn_test(void) {
     Tensor x = tensor_alloc(1, 2);
