@@ -1,14 +1,18 @@
 # perceptron-c
 Building a modular perceptron in C for educational purposes.
 
-## testing 
+## testing
+compile from project root 
 ```bash
-# compile from project root
 make clean
 make
-
+```
+train
+```bash
 ./perceptron train --dataset xor --layers 1 --units 4 --epochs 500 --lr 0.1 --seed 1337 --out data/out/model.bin
-
+```
+check these for back compatibility
+```bash
 # sanity: previous commands still work
 ./perceptron --help
 ./perceptron train xor
@@ -30,7 +34,7 @@ make
 
 ### valgrind shows no leaks:
 ```bash
-valgrind --leak-check=full ./perceptron gradcheck
+valgrind --leak-check=full ./perceptron train <args>
 ```
 
 - Expect: All heap blocks were freed -- no leaks are possible.

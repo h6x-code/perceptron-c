@@ -80,8 +80,8 @@ int main(int argc, char **argv) {
     }
 
     if (strcmp(argv[1], "train") == 0) {
-        int    epochs = 2000;
-        float  lr     = 0.1f;
+        int epochs = 2000;
+        float  lr = 0.1f;
         unsigned seed = 1337;
         const char *dataset = "xor";
         int layers_hidden = 1;
@@ -89,6 +89,11 @@ int main(int argc, char **argv) {
         int units_cnt = 1;
         float val_frac = 0.0f;
         const char *out_path = NULL;
+        int csv_has_header = 0;
+        const char *mnist_images = NULL;
+        const char *mnist_labels = NULL;
+        int limit = 0;
+        const char *norm = "minmax"; // default
 
         for (int a = 2; a < argc; ++a) {
             if (!strcmp(argv[a], "--epochs") && a+1 < argc) { epochs = atoi(argv[++a]); }
@@ -99,9 +104,13 @@ int main(int argc, char **argv) {
             else if (!strcmp(argv[a], "--units") && a+1 < argc) { units_cnt = parse_units(argv[++a], units_arr, 8); }
             else if (!strcmp(argv[a], "--val") && a+1 < argc)    { val_frac = (float)atof(argv[++a]); }
             else if (!strcmp(argv[a], "--out") && a+1 < argc)    { out_path = argv[++a]; }
+            else if (!strcmp(argv[a], "--csv-has-header")) { csv_has_header = 1; }
+            else if (!strcmp(argv[a], "--mnist-images") && a+1 < argc) { mnist_images = argv[++a]; }
+            else if (!strcmp(argv[a], "--mnist-labels") && a+1 < argc) { mnist_labels = argv[++a]; }
+            else if (!strcmp(argv[a], "--limit") && a+1 < argc) { limit = atoi(argv[++a]); }
+            else if (!strcmp(argv[a], "--norm") && a+1 < argc) { norm = argv[++a]; }
             else if (!strcmp(argv[a], "--help")) { usage(); return 0; }
         }
-        if (strcmp(dataset, "xor") != 0) { fprintf(stderr, "Only --dataset xor supported now.\n"); return 1; }
         if (units_cnt != layers_hidden) { fprintf(stderr, "units count (%d) must match --layers (%d)\n", units_cnt, layers_hidden); return 1; }
         if (val_frac < 0.0f) val_frac = 0.0f; if (val_frac > 0.9f) val_frac = 0.9f;
 
@@ -110,8 +119,30 @@ int main(int argc, char **argv) {
         printf(" epochs=%d lr=%.4f seed=%u val=%.2f\n", epochs, lr, seed, val_frac);
 
         // Dataset + fixed split
-        Dataset d = load_dataset("xor");
-        if (d.n <= 0) { fprintf(stderr, "dataset load failed\n"); return 1; }
+        Dataset d = {0};
+
+        if (!strncmp(dataset, "csv:", 4)) {
+            const char *path = dataset + 4;
+            if (dataset_load_csv(path, csv_has_header, &d) != 0) {
+                fprintf(stderr, "CSV load failed: %s\n", path); return 1;
+            }
+            if (!strcmp(norm, "minmax")) dataset_normalize_minmax(&d);
+        } else if (!strcmp(dataset, "mnist")) {
+            if (!mnist_images || !mnist_labels) {
+                fprintf(stderr, "For --dataset mnist, provide --mnist-images and --mnist-labels (uncompressed IDX).\n");
+                return 1;
+            }
+            if (dataset_load_mnist_idx(mnist_images, mnist_labels, limit, &d) != 0) {
+                fprintf(stderr, "MNIST IDX load failed.\n"); return 1;
+            }
+            // already scaled to [0,1] in loader
+        } else if (!strcmp(dataset, "xor") || !strcmp(dataset, "and") || !strcmp(dataset, "or")) {
+            d = load_dataset(dataset); // existing synthetic
+        } else {
+            fprintf(stderr, "Unknown dataset: %s\n", dataset);
+            return 1;
+        }
+
 
         int idx_all[64]; // plenty for tiny sets; grow when adding bigger loaders
         for (int i = 0; i < d.n; ++i) idx_all[i] = i;
@@ -127,15 +158,18 @@ int main(int argc, char **argv) {
 
         // Model + grads
         MLP m = (MLP){0};
-        if (mlp_init(&m, /*d_in=*/2, /*d_out=*/2, units_arr, units_cnt, seed) != 0) {
-            fprintf(stderr, "mlp_init failed\n"); return 1;
+        if (mlp_init(&m, /*d_in=*/d.d, /*d_out=*/d.k, units_arr, units_cnt, seed) != 0) {
+            fprintf(stderr, "mlp_init failed\n"); dataset_free(&d); return 1;
         }
+
+        // Grad buffers aligned to layers
         Tensor *dW = (Tensor*)malloc(m.L * sizeof(Tensor));
         Tensor *db = (Tensor*)malloc(m.L * sizeof(Tensor));
         for (int l=0;l<m.L;l++){ dW[l]=tensor_alloc(m.W[l].rows,m.W[l].cols); db[l]=tensor_alloc(1,m.b[l].cols); }
 
         Tensor x = tensor_alloc(1, m.d_in);
         Tensor logits = tensor_alloc(1, m.d_out);
+
 
         double t0 = now_ms();
         for (int e = 1; e <= epochs; ++e) {
@@ -150,8 +184,10 @@ int main(int argc, char **argv) {
             // train loop
             for (int t = 0; t < n_train; ++t) {
                 int i = idx_train[t];
-                x.data[0] = d.X[2*i+0];
-                x.data[1] = d.X[2*i+1];
+                // Copy features of sample i into x (1 × d.d)
+                const float *row = &d.X[(size_t)i * (size_t)d.d];
+                for (int j = 0; j < d.d; ++j) x.data[j] = row[j];
+
                 int y = d.y[i];
 
                 mlp_forward_logits(&m, &x, &logits);
@@ -169,8 +205,9 @@ int main(int argc, char **argv) {
             if (n_val > 0) {
                 for (int t = 0; t < n_val; ++t) {
                     int i = idx_val[t];
-                    x.data[0] = d.X[2*i+0];
-                    x.data[1] = d.X[2*i+1];
+                    const float *row = &d.X[(size_t)i * (size_t)d.d];
+                    for (int j = 0; j < d.d; ++j) x.data[j] = row[j];
+
                     int y = d.y[i];
                     mlp_forward_logits(&m, &x, &logits);
                     if (argmax(&logits) == y) correct_val++;
