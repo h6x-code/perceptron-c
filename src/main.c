@@ -539,20 +539,20 @@ int main(int argc, char **argv) {
         if (use_momentum) sgd_momentum_free(&optm);
         if (bestW) { free_params(bestW, bestB, m.L); }
 
-        // Free multithreading
+        // Free threads
         for (int t = 0; t < T; ++t) {
             for (int l = 0; l < m.L; ++l) {
                 tensor_free(&th[t].dW_local[l]);
                 tensor_free(&th[t].db_local[l]);
             }
-            free(th[t].dW_local);  th[t].dW_local = NULL;
-            free(th[t].db_local);  th[t].db_local = NULL;
+            free(th[t].dW_local); th[t].dW_local = NULL;
+            free(th[t].db_local); th[t].db_local = NULL;
 
             tensor_free(&th[t].logits);
             tensor_free(&th[t].x);
             mlpws_free(&th[t].ws);
         }
-        free(th);
+        free(th); th = NULL;
 
         // free indices + dataset
         free(idx_all);
