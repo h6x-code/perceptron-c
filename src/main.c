@@ -5,6 +5,7 @@
 #include <string.h>
 #include "data.h"
 #include "nn.h"
+#include "nn_model.h"
 #include "opt.h"
 #include "tensor.h"
 
@@ -17,25 +18,21 @@ static void usage(void) {
          "\nDefaults: --layers 1 --units 128 --epochs 10 --lr 0.01 --batch 32 --seed 1337");
 }
 
-static void clip_inplace(float *g, int n, float limit) {
-    for (int i = 0; i < n; ++i) {
-        if (g[i] >  limit) g[i] =  limit;
-        if (g[i] < -limit) g[i] = -limit;
+
+// Misc helpers
+
+static int parse_units(const char *s, int *out, int maxn) {
+    // returns count parsed; expects "a,b,c"
+    int n = 0;
+    const char *p = s;
+    while (*p && n < maxn) {
+        char *end = NULL;
+        long v = strtol(p, &end, 10);
+        if (p == end) break;
+        out[n++] = (int)v;
+        if (*end == ',') p = end + 1; else { p = end; break; }
     }
-}
-
-// Scale tensor data in-place from [-1,1] to [-a, a]
-static void tensor_scale_range(Tensor *t, float a) {
-    int n = t->rows * t->cols;
-    for (int i = 0; i < n; ++i) t->data[i] *= a;
-}
-
-// He-uniform initializer for a (fan_in x fan_out) weight matrix
-static void he_uniform_init(Tensor *W, int fan_in, unsigned seed) {
-    // Start from uniform in [-1,1], then scale to [-sqrt(6/fan_in), +sqrt(6/fan_in)]
-    tensor_randu(W, seed);
-    float a = sqrtf(6.0f / (float)fan_in);
-    tensor_scale_range(W, a);
+    return n;
 }
 
 // tiny deterministic RNG for shuffling (LCG)
@@ -62,123 +59,6 @@ static int argmax(const Tensor *t) {
     return best;
 }
 
-// Train a fixed 2–2–2 MLP on XOR with SGD
-static void train_xor(int epochs, float lr, unsigned seed) {
-    // Load XOR (n=4, d=2, k=2)
-    Dataset d = load_dataset("xor");
-    if (d.n == 0) { fprintf(stderr, "dataset load failed\n"); return; }
-
-    // Parameters
-    Tensor W1 = tensor_alloc(2, 2);
-    Tensor b1 = tensor_alloc(1, 2);
-    Tensor W2 = tensor_alloc(2, 2);
-    Tensor b2 = tensor_alloc(1, 2);
-
-    // New: He-uniform for ReLU layers
-    he_uniform_init(&W1, /*fan_in=*/2, seed);
-    he_uniform_init(&W2, /*fan_in=*/2, seed + 1);
-
-    // New: small positive biases for hidden ReLU to avoid dead units
-    b1.data[0] = 0.10f;
-    b1.data[1] = 0.10f;
-
-    // Output biases can be zero
-    b2.data[0] = 0.0f;
-    b2.data[1] = 0.0f;
-
-    // Grad buffers
-    Tensor dW1 = tensor_alloc(2, 2);
-    Tensor db1 = tensor_alloc(1, 2);
-    Tensor dW2 = tensor_alloc(2, 2);
-    Tensor db2 = tensor_alloc(1, 2);
-
-    // Work buffers (forward)
-    Tensor x  = tensor_alloc(1, 2);
-    Tensor z1 = tensor_alloc(1, 2);
-    Tensor a1 = tensor_alloc(1, 2);
-    Tensor z2 = tensor_alloc(1, 2);
-
-    // Work buffers (backward)
-    Tensor dz2 = tensor_alloc(1, 2);
-    Tensor da1 = tensor_alloc(1, 2);
-    Tensor dx  = tensor_alloc(1, 2);
-
-    int idx[4] = {0,1,2,3};
-
-    for (int e = 1; e <= epochs; ++e) {
-        shuffle_indices(idx, d.n, seed + (unsigned)e);
-
-        float loss_sum = 0.0f;
-        int correct = 0;
-
-        for (int t = 0; t < d.n; ++t) {
-            int i = idx[t];
-
-            // Load sample into x (1x2)
-            x.data[0] = d.X[2*i + 0];
-            x.data[1] = d.X[2*i + 1];
-            int y = d.y[i];
-
-            // Forward: z1 -> a1 -> z2
-            dense_forward(&x, &W1, &b1, &z1);
-
-            // a1 = LeakyReLU(z1)
-            for (int k = 0; k < 2; ++k) a1.data[k] = z1.data[k];
-            leaky_relu_inplace(&a1, 0.1f);
-;
-            dense_forward(&a1, &W2, &b2, &z2);
-
-            // Loss and accuracy
-            float L = cross_entropy_from_logits(&z2, y);
-            loss_sum += L;
-
-            if (isnan(L) || isinf(L)) {
-                fprintf(stderr, "[train] numerical issue (loss=%f). Try smaller --lr.\n", L);
-                break;
-            }
-
-            // argmax over logits (same result as softmax argmax, no mutation)
-            if (argmax(&z2) == y) {
-                correct++;
-            }
-
-            // Backward: logits -> a1
-            softmax_ce_backward_from_logits(&z2, y, &dz2);
-            dense_backward(&a1, &W2, &dz2, &da1, &dW2, &db2);
-
-            // Backward: LeakyReLU (use pre-activation z1)
-            leaky_relu_backward_inplace(&z1, &da1, 0.1f);
-            dense_backward(&x, &W1, &da1, &dx, &dW1, &db1);
-
-            // Clip grads to avoid blow-ups on rare outliers
-            clip_inplace(dW2.data, 4, 5.0f);
-            clip_inplace(db2.data, 2, 5.0f);
-            clip_inplace(dW1.data, 4, 5.0f);
-            clip_inplace(db1.data, 2, 5.0f);
-
-            // SGD step
-            sgd_step(W2.data, dW2.data, 4, lr);
-            sgd_step(b2.data, db2.data, 2, lr);
-            sgd_step(W1.data, dW1.data, 4, lr);
-            sgd_step(b1.data, db1.data, 2, lr);
-        }
-
-        float acc = (float)correct / (float)d.n;
-        printf("[epoch %3d] loss=%.6f acc=%.2f%%\n", e, loss_sum / (float)d.n, acc * 100.0f);
-
-        // early exit if solid accuracy
-        if (acc >= 0.95f) {
-            printf("[train] reached >=95%% accuracy — stopping early.\n");
-            break;
-        }
-    }
-
-    // cleanup
-    tensor_free(&dx);  tensor_free(&da1); tensor_free(&dz2);
-    tensor_free(&z2);  tensor_free(&a1);  tensor_free(&z1); tensor_free(&x);
-    tensor_free(&dW2); tensor_free(&db2); tensor_free(&dW1); tensor_free(&db1);
-    tensor_free(&b2);  tensor_free(&W2);  tensor_free(&b1);  tensor_free(&W1);
-}
 
 int main(int argc, char **argv) {
     if (argc < 2 || strcmp(argv[1], "--help") == 0) {
@@ -187,27 +67,82 @@ int main(int argc, char **argv) {
     }
 
     if (strcmp(argv[1], "train") == 0) {
-        // Minimal flags for now: --epochs N --lr X --seed S --dataset xor
         int    epochs = 2000;
         float  lr     = 0.1f;
         unsigned seed = 1337;
         const char *dataset = "xor";
+        int layers_hidden = 1;
+        int units_arr[8] = {4};  // default one hidden layer with 4 units
+        int units_cnt = 1;
 
-        // simple flag parse (very minimal)
         for (int a = 2; a < argc; ++a) {
             if (!strcmp(argv[a], "--epochs") && a+1 < argc) { epochs = atoi(argv[++a]); }
             else if (!strcmp(argv[a], "--lr") && a+1 < argc) { lr = (float)atof(argv[++a]); }
             else if (!strcmp(argv[a], "--seed") && a+1 < argc) { seed = (unsigned)strtoul(argv[++a], NULL, 10); }
             else if (!strcmp(argv[a], "--dataset") && a+1 < argc) { dataset = argv[++a]; }
+            else if (!strcmp(argv[a], "--layers") && a+1 < argc) { layers_hidden = atoi(argv[++a]); }
+            else if (!strcmp(argv[a], "--units") && a+1 < argc) { units_cnt = parse_units(argv[++a], units_arr, 8); }
         }
 
         if (strcmp(dataset, "xor") != 0) {
             fprintf(stderr, "Only --dataset xor is supported at this step.\n");
             return 1;
         }
+        if (units_cnt != layers_hidden) {
+            fprintf(stderr, "units count (%d) must match --layers (%d)\n", units_cnt, layers_hidden);
+            return 1;
+        }
 
-        printf("[train] dataset=%s epochs=%d lr=%.4f seed=%u\n", dataset, epochs, lr, seed);
-        train_xor(epochs, lr, seed);
+        printf("[train] ds=%s epochs=%d lr=%.4f seed=%u layers=%d units=",
+            dataset, epochs, lr, seed, layers_hidden);
+        for (int i=0;i<units_cnt;i++) printf("%s%d", (i?",":""), units_arr[i]);
+        puts("");
+
+        // Train with flexible MLP
+        Dataset d = load_dataset("xor");
+        MLP m = {0};
+        if (mlp_init(&m, /*d_in=*/2, /*d_out=*/2, units_arr, units_cnt, seed) != 0) {
+            fprintf(stderr, "mlp_init failed\n"); return 1;
+        }
+
+        // Grad buffers aligned to layers
+        Tensor *dW = (Tensor*)malloc(m.L * sizeof(Tensor));
+        Tensor *db = (Tensor*)malloc(m.L * sizeof(Tensor));
+        for (int l=0;l<m.L;l++){ dW[l]=tensor_alloc(m.W[l].rows,m.W[l].cols); db[l]=tensor_alloc(1,m.b[l].cols); }
+
+        Tensor x = tensor_alloc(1, 2);
+        Tensor logits = tensor_alloc(1, 2);
+
+        int idx[4] = {0,1,2,3};
+        for (int e = 1; e <= epochs; ++e) {
+            shuffle_indices(idx, d.n, seed + (unsigned)e);
+            int correct = 0;
+            float loss_sum = 0.0f;
+
+            for (int t = 0; t < d.n; ++t) {
+                int i = idx[t];
+                x.data[0] = d.X[2*i+0];
+                x.data[1] = d.X[2*i+1];
+                int y = d.y[i];
+
+                mlp_forward_logits(&m, &x, &logits);
+                loss_sum += cross_entropy_from_logits(&logits, y);
+                if (argmax(&logits) == y) correct++;
+
+                mlp_backward_from_logits(&m, &x, y, dW, db, /*alpha=*/0.1f);
+                mlp_sgd_step(&m, dW, db, lr);
+            }
+
+            float acc = (float)correct / (float)d.n;
+            printf("[epoch %3d] loss=%.6f acc=%.2f%%\n", e, loss_sum/(float)d.n, acc*100.0f);
+            if (acc >= 0.95f) { puts("[train] reached >=95% accuracy — stopping early."); break; }
+        }
+
+        // cleanup
+        tensor_free(&logits); tensor_free(&x);
+        for (int l=0;l<m.L;l++){ tensor_free(&db[l]); tensor_free(&dW[l]); }
+        free(db); free(dW);
+        mlp_free(&m);
         return 0;
     }
 
