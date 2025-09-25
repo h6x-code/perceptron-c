@@ -1,7 +1,7 @@
 # --- Compiler / Flags --------------------------------------------------------
 
 CC       := clang
-CFLAGS   := -std=c11 -O2 -Wall -Wextra -pedantic
+CFLAGS   := -std=c11 -O2 -Wall -Wextra -pedantic -Isrc
 LDFLAGS  := -lm
 
 # Address/UB sanitizers (opt-in when debugging)
