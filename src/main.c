@@ -92,8 +92,8 @@ int main(int argc, char **argv) {
     }
 
     if (strcmp(argv[1], "train") == 0) {
-        int epochs = 2000;
-        float  lr = 0.1f;
+        int epochs = 100;
+        float  lr = 0.01f;
         unsigned seed = 1337;
         const char *dataset = "xor";
         int layers_hidden = 1;
@@ -108,6 +108,9 @@ int main(int argc, char **argv) {
         const char *norm = "minmax"; // default
         int batch = 32; // mini-batch size
         float momentum = 0.0f;  // 0 = vanilla SGD
+        float lr_decay = 1.0f;
+        int lr_step = 0;
+        int patience = 0;
 
         for (int a = 2; a < argc; ++a) {
             if (!strcmp(argv[a], "--epochs") && a+1 < argc) { epochs = atoi(argv[++a]); }
@@ -185,6 +188,13 @@ int main(int argc, char **argv) {
         Tensor *db = (Tensor*)malloc(m.L * sizeof(Tensor));
         for (int l=0;l<m.L;l++){ dW[l]=tensor_alloc(m.W[l].rows,m.W[l].cols); db[l]=tensor_alloc(1,m.b[l].cols); }
 
+        Tensor *dW_tmp = (Tensor*)malloc(m.L * sizeof(Tensor));
+        Tensor *db_tmp = (Tensor*)malloc(m.L * sizeof(Tensor));
+        for (int l = 0; l < m.L; ++l) {
+            dW_tmp[l] = tensor_alloc(m.W[l].rows, m.W[l].cols);
+            db_tmp[l] = tensor_alloc(1, m.b[l].cols);
+        }
+
         Tensor x = tensor_alloc(1, m.d_in);
         Tensor logits = tensor_alloc(1, m.d_out);
 
@@ -260,16 +270,16 @@ int main(int argc, char **argv) {
                 }
             }
 
-            double e_ms = now_ms() - e0;
+            double e_s = (now_ms() - e0) / 1000.0;
             float acc_tr = (float)correct_train / (float)n_train;
             float acc_va = (n_val>0) ? ((float)correct_val / (float)n_val) : NAN;
 
             if (n_val > 0) {
-                printf("[epoch %3d] loss=%.6f acc=%.2f%% val=%.2f%% time=%.1fms\n",
-                    e, loss_sum/(float)n_train, acc_tr*100.0f, acc_va*100.0f, e_ms);
+                printf("[epoch %3d] loss=%.6f acc=%.2f%% val=%.2f%% time=%.1fs\n",
+                    e, loss_sum/(float)n_train, acc_tr*100.0f, acc_va*100.0f, e_s);
             } else {
-                printf("[epoch %3d] loss=%.6f acc=%.2f%% time=%.1fms\n",
-                    e, loss_sum/(float)n_train, acc_tr*100.0f, e_ms);
+                printf("[epoch %3d] loss=%.6f acc=%.2f%% time=%.1fs\n",
+                    e, loss_sum/(float)n_train, acc_tr*100.0f, e_s);
             }
 
             if (acc_tr >= 0.99f && (n_val == 0 || acc_va >= 0.99f)) {
@@ -278,8 +288,9 @@ int main(int argc, char **argv) {
             }
         }
         double t_ms = now_ms() - t0;
+        double t_s = t_ms / 1000.0;
 
-        printf("[train] total time: %.1fms\n", t_ms);
+        printf("[train] total time: %.1fs\n", t_s);
 
         if (out_path) {
             if (io_save_mlp(&m, out_path) == 0) {

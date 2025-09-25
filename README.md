@@ -13,11 +13,12 @@ train
   --dataset mnist \
   --mnist-images data/MNIST/raw/train-images-idx3-ubyte \
   --mnist-labels data/MNIST/raw/train-labels-idx1-ubyte \
-  --limit 2000 --val 0.1 \
-  --layers 1 --units 64 \
-  --epochs 10 \
+  --val 0.1 \
+  --layers 2 --units 128,64 \
+  --epochs 30 \
   --lr 0.05 \
   --batch 32 \
+  --momentum 0.9 \
   --seed 1337 \
   --out data/out/model.bin
 ```
@@ -35,8 +36,10 @@ check these for back
 ## Success criteria (expected output)
 
 ### ./perceptron train <args> prints something like:
-`[epoch   5] loss=0.146914 acc=95.55% time=4377.5ms`
-`[train] reached >=95% accuracy — stopping early.`
+`[epoch  29] loss=0.146914 acc=99.55% time=4377.5ms`
+
+`[train] reached >=99% accuracy — stopping early.`
+
 `[save] wrote model to data/out/model.bin`
 
 - Model should converge early
