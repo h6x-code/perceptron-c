@@ -9,11 +9,11 @@ Built as an educational project: the code emphasizes clarity, memory safety (Val
 
 ## Features
 
-- Written in **portable C11** (Linux/macOS).
+- Written in portable C11 (Linux/macOS).
 - Shape-flexible MLP (`--layers` / `--units a,b,c`).
 - Forward, backward, cross-entropy, ReLU, softmax.
 - Optimizers: SGD + momentum, optional LR scheduling.
-- Data loaders: synthetic (XOR, AND, OR), **MNIST IDX format**.
+- Data loaders: synthetic (XOR, AND, OR), MNIST IDX format.
 - Save/load models in compact binary format.
 - CLI interface for training and prediction.
 - Memory checked with `valgrind`.
