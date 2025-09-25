@@ -72,6 +72,18 @@ static int argmax(const Tensor *t) {
     return best;
 }
 
+static void explain_mnist_rc(int rc) {
+    switch (rc) {
+        case 1: fprintf(stderr, "MNIST: could not open images or labels file.\n"); break;
+        case 2: fprintf(stderr, "MNIST: failed reading image header.\n"); break;
+        case 3: fprintf(stderr, "MNIST: failed reading label header.\n"); break;
+        case 4: fprintf(stderr, "MNIST: bad magic or count mismatch (need 0x00000803 / 0x00000801 and same N).\n"); break;
+        case 5: fprintf(stderr, "MNIST: allocation failed.\n"); break;
+        case 6: fprintf(stderr, "MNIST: unexpected EOF while reading images.\n"); break;
+        case 7: fprintf(stderr, "MNIST: unexpected EOF while reading labels.\n"); break;
+        default: fprintf(stderr, "MNIST: unknown error.\n"); break;
+    }
+}
 
 int main(int argc, char **argv) {
     if (argc < 2 || strcmp(argv[1], "--help") == 0) {
@@ -133,7 +145,8 @@ int main(int argc, char **argv) {
                 return 1;
             }
             if (dataset_load_mnist_idx(mnist_images, mnist_labels, limit, &d) != 0) {
-                fprintf(stderr, "MNIST IDX load failed.\n"); return 1;
+                int rc = dataset_load_mnist_idx(mnist_images, mnist_labels, limit, &d);
+                if (rc != 0) { explain_mnist_rc(rc); return 1; }
             }
             // already scaled to [0,1] in loader
         } else if (!strcmp(dataset, "xor") || !strcmp(dataset, "and") || !strcmp(dataset, "or")) {
@@ -143,8 +156,9 @@ int main(int argc, char **argv) {
             return 1;
         }
 
+        int *idx_all = (int*)malloc((size_t)d.n * sizeof(int));
+        if (!idx_all) { fprintf(stderr, "out of memory for index array\n"); dataset_free(&d); return 1; }
 
-        int idx_all[64]; // plenty for tiny sets; grow when adding bigger loaders
         for (int i = 0; i < d.n; ++i) idx_all[i] = i;
         shuffle_indices(idx_all, d.n, seed);
 
@@ -248,6 +262,7 @@ int main(int argc, char **argv) {
         for (int l=0;l<m.L;l++){ tensor_free(&db[l]); tensor_free(&dW[l]); }
         free(db); free(dW);
         mlp_free(&m);
+        free(idx_all);
         return 0;
     }
 

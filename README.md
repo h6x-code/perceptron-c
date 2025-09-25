@@ -9,7 +9,15 @@ make
 ```
 train
 ```bash
-./perceptron train --dataset xor --layers 1 --units 4 --epochs 500 --lr 0.1 --seed 1337 --out data/out/model.bin
+./perceptron train \
+  --dataset mnist \
+  --mnist-images path/to/MNIST/train-images-idx3-ubyte \
+  --mnist-labels path/to/MNIST/train-labels-idx1-ubyte \
+  --limit 2000 \
+  --layers 1 --units 64 \
+  --epochs 10 \
+  --lr 0.01 \
+  --seed 1337
 ```
 check these for back
 ```bash
