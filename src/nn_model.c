@@ -1,5 +1,6 @@
 #include "nn_model.h"
 #include "nn.h"       // dense_forward, leaky_relu_inplace/backward, softmax_ce_backward_from_logits
+#include <assert.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -129,6 +130,15 @@ void mlp_sgd_step(MLP *m, Tensor *dW, Tensor *db, float lr) {
 }
 
 int mlpws_init(MLPWS *ws, const MLP *m) {
+    assert(m && m->L >= 1);
+    // dims should be length L+1: [d_in, h1, ..., d_out]
+    for (int l = 0; l < m->L; ++l) {
+        assert(m->W[l].rows == m->dims[l]);
+        assert(m->W[l].cols == m->dims[l+1]);
+        assert(m->b[l].rows == 1);
+        assert(m->b[l].cols == m->dims[l+1]);
+    }
+    
     ws->L = m->L;
     ws->a  = (Tensor*)malloc((size_t)(m->L + 1) * sizeof(Tensor));
     ws->z  = (Tensor*)malloc((size_t)(m->L)     * sizeof(Tensor));

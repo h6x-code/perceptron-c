@@ -1,10 +1,17 @@
 #include "nn.h"
+#include <assert.h>
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
 
 // Forward pass for a dense layer: out = xW + b
 void dense_forward(const Tensor *x, const Tensor *W, const Tensor *b, Tensor *o) {
+    assert(W && b && x && o);
+    assert(W->rows > 0 && W->cols > 0);
+    assert(b->rows == 1 && b->cols == W->cols);
+    assert(x->rows == 1 && x->cols == W->rows);
+    assert(o->rows == 1 && o->cols == W->cols);
+
     int d = W->rows;   // input dimension
     int m = W->cols;   // output dimension
 
@@ -141,6 +148,15 @@ void leaky_relu_backward_inplace(const Tensor *preact, Tensor *dact, float alpha
 
 void dense_backward(const Tensor *x, const Tensor *W, const Tensor *dout,
                     Tensor *dx, Tensor *dW, Tensor *db) {
+
+    assert(x && W && dout && dx && dW && db);
+    assert(W->rows > 0 && W->cols > 0);
+    assert(x->rows == 1 && x->cols == W->rows);
+    assert(dout->rows == 1 && dout->cols == W->cols);
+    assert(dx->rows == 1 && dx->cols == W->rows);
+    assert(dW->rows == W->rows && dW->cols == W->cols);
+    assert(db->rows == 1 && db->cols == W->cols);
+
     // shapes: x(1xd), W(dxm), dout(1xm)
     int d = W->rows;
     int m = W->cols;

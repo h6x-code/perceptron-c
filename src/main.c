@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <math.h>
 #include <pthread.h>
 #include <stdint.h>
@@ -74,20 +75,45 @@ static void free_param_stack(Tensor *dW, Tensor *db, int L) {
 static void* train_slice_run(void *arg) {
     Slice *s = (Slice*)arg;
     ThreadSlot *S = s->slot;
-    S->loss = 0.0f; S->correct = 0;
+
+    // --- ASSERTS: bounds & invariants for this shard ---
+    assert(s);
+    assert(s->d && s->m && s->idx && S);
+    assert(s->start >= 0);
+    assert(s->end   >= s->start);
+    assert(s->t0    >= 0);
+
+    // shard must fit within the current batch [t0, t0+B)
+    // All indices s->t0 + u must be valid offsets into idx_train
+    // (idx_train holds indices in [0, n_train) ).
+    // We can only check the mapped sample indices against dataset size here:
+    for (int u = s->start; u < s->end; ++u) {
+        int i = s->idx[s->t0 + u];
+        assert(i >= 0 && i < s->d->n);  // dataset row must exist
+    }
+    // --- end ASSERTS ---
+
+    S->loss = 0.0f;
+    S->correct = 0;
     zero_param_stack(S->dW_local, S->db_local, S->ws.L);
 
     for (int u = s->start; u < s->end; ++u) {
         int i = s->idx[s->t0 + u];
         const float *row = &s->d->X[(size_t)i * (size_t)s->d->d];
+
+        // copy features to thread-local input tensor
         for (int j = 0; j < s->m->d_in; ++j) S->x.data[j] = row[j];
-        int y = s->d->y[i];
+        int y = s->d->y ? s->d->y[i] : -1;
 
         mlp_forward_logits_ws(s->m, &S->x, &S->logits, &S->ws);
-        S->loss += cross_entropy_from_logits(&S->logits, y);
+        float L = cross_entropy_from_logits(&S->logits, y);
+        S->loss += L;
+
         if (argmax(&S->logits) == y) S->correct++;
 
-        mlp_backward_from_logits_ws(s->m, y, &S->ws, S->dW_local, S->db_local, 0.1f);
+        mlp_backward_from_logits_ws(s->m, y, &S->ws,
+                                    S->dW_local, S->db_local,
+                                    /*leaky_alpha=*/0.1f);
     }
     return NULL;
 }
@@ -378,18 +404,18 @@ int main(int argc, char **argv) {
                 }
                 for (int t = 0; t < TT; ++t) pthread_join(pth[t], NULL);
 
-                // Reduce per-thread grads deterministically with Kahan in double, and average by B
+                // Reduce per-thread grads deterministically with Kahan compensation in double,
+                // and write averaged grads directly into dW/db.
                 Tensor *dW = NULL, *db = NULL;
                 alloc_param_like(&m, &dW, &db);
 
-                const double invB = 1.0 / (double)B;
+                const float invB = 1.0f / (float)B;
 
-                // For each layer, reduce weights then biases
                 for (int l = 0; l < m.L; ++l) {
                     const int nW = m.W[l].rows * m.W[l].cols;
                     const int nb = m.b[l].cols;
 
-                    // Weights: Kahan compensated sum in fixed thread order (0..TT-1)
+                    // Weights: fixed thread order [0..TT), Kahan in double
                     for (int i = 0; i < nW; ++i) {
                         double sum = 0.0, c = 0.0;
                         for (int t = 0; t < TT; ++t) {
@@ -398,10 +424,10 @@ int main(int argc, char **argv) {
                             c = (tmp - sum) - y;
                             sum = tmp;
                         }
-                        dW[l].data[i] = (float)(sum * invB);
+                        dW[l].data[i] = (float)(sum * (double)invB);
                     }
 
-                    // Biases: Kahan compensated sum in fixed thread order (0..TT-1)
+                    // Biases: fixed thread order, Kahan in double
                     for (int j = 0; j < nb; ++j) {
                         double sum = 0.0, c = 0.0;
                         for (int t = 0; t < TT; ++t) {
@@ -410,13 +436,14 @@ int main(int argc, char **argv) {
                             c = (tmp - sum) - y;
                             sum = tmp;
                         }
-                        db[l].data[j] = (float)(sum * invB);
+                        db[l].data[j] = (float)(sum * (double)invB);
                     }
                 }
 
-                // Single optimizer step with averaged grads
+                // one optimizer step using averaged grads
                 if (use_momentum) sgd_momentum_step(&optm, m.W, m.b, dW, db, lr);
                 else              sgd_step_params  (m.W, m.b, dW, db, m.L, lr);
+
                 free_param_stack(dW, db, m.L);
 
                 // batch stats
@@ -547,7 +574,6 @@ int main(int argc, char **argv) {
             else if (!strcmp(argv[a], "--input") && a+1 < argc)         { input_spec = argv[++a]; }
             else if (!strcmp(argv[a], "--csv-has-header"))              { csv_has_header = 1; }
             else if (!strcmp(argv[a], "--threads") && a+1 < argc)       { threads = atoi(argv[++a]); if (threads < 1) threads = 1; }
-            // NEW:
             else if (!strcmp(argv[a], "--mnist-images") && a+1 < argc)  { mnist_images = argv[++a]; }
             else if (!strcmp(argv[a], "--mnist-labels") && a+1 < argc)  { mnist_labels = argv[++a]; }
             else if (!strcmp(argv[a], "--limit") && a+1 < argc)         { limit = atoi(argv[++a]); if (limit < 0) limit = 0; }
