@@ -20,13 +20,14 @@ make
 ## Success criteria (expected output)
 
 ### ./perceptron gradcheck prints something like:
-`[loss] before=0.802xxx after=0.561xxx (expect after < before)`
+`[gradcheck] loss=0.626060 max_rel_error=7.402e-05`
+`[gradcheck] OK (max_rel_error < 1e-4)`
 
 - For loss-test, after must be strictly less than before.
 
 ### valgrind shows no leaks:
 ```bash
-valgrind --leak-check=full ./perceptron loss-test
+valgrind --leak-check=full ./perceptron gradcheck
 ```
 
 - Expect: All heap blocks were freed -- no leaks are possible.
