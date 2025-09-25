@@ -8,6 +8,60 @@
 #include <ctype.h>
 
 
+// ---------- Synthetic datasets: AND / OR / XOR ----------
+// Each row: two inputs (x1, x2), last column is integer label y in {0,1}
+static const float AND_X[] = {
+    0.f, 0.f,  0.f,
+    0.f, 1.f,  0.f,
+    1.f, 0.f,  0.f,
+    1.f, 1.f,  1.f
+};
+static const float OR_X[] = {
+    0.f, 0.f,  0.f,
+    0.f, 1.f,  1.f,
+    1.f, 0.f,  1.f,
+    1.f, 1.f,  1.f
+};
+static const float XOR_X[] = {
+    0.f, 0.f,  0.f,
+    0.f, 1.f,  1.f,
+    1.f, 0.f,  1.f,
+    1.f, 1.f,  0.f
+};
+
+static Dataset dataset_from_triplets(const float *triplets, int n_rows) {
+    Dataset ds = {0};
+    ds.n = n_rows;
+    ds.d = 2;   // two features
+    ds.k = 2;   // two classes
+
+    ds.X = (float*)malloc((size_t)ds.n * (size_t)ds.d * sizeof(float));
+    ds.y = (int*)  malloc((size_t)ds.n * sizeof(int));
+    if (!ds.X || !ds.y) {
+        free(ds.X); free(ds.y);
+        ds = (Dataset){0};
+        return ds;
+    }
+
+    for (int i = 0; i < ds.n; ++i) {
+        ds.X[i*2 + 0] = triplets[i*3 + 0];
+        ds.X[i*2 + 1] = triplets[i*3 + 1];
+        ds.y[i]       = (int)triplets[i*3 + 2];
+    }
+    return ds;
+}
+
+// Public API used by main.c
+Dataset load_dataset(const char *name) {
+    if (!name) return (Dataset){0};
+    if (strcmp(name, "and") == 0) return dataset_from_triplets(AND_X, 4);
+    if (strcmp(name, "or")  == 0) return dataset_from_triplets(OR_X,  4);
+    if (strcmp(name, "xor") == 0) return dataset_from_triplets(XOR_X, 4);
+    // Unknown name → empty dataset
+    return (Dataset){0};
+}
+
+
 // ---------- CSV loader (simple numeric, last column is label) ----------
 
 static int is_blank_line(const char *s) {

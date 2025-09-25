@@ -11,7 +11,7 @@ train
 ```bash
 ./perceptron train --dataset xor --layers 1 --units 4 --epochs 500 --lr 0.1 --seed 1337 --out data/out/model.bin
 ```
-check these for back compatibility
+check these for back
 ```bash
 # sanity: previous commands still work
 ./perceptron --help
