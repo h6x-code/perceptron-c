@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "data.h"
+#include "io.h"
 #include "nn.h"
 #include "nn_model.h"
 #include "opt.h"
@@ -74,6 +75,7 @@ int main(int argc, char **argv) {
         int layers_hidden = 1;
         int units_arr[8] = {4};  // default one hidden layer with 4 units
         int units_cnt = 1;
+        const char *out_path = NULL;
 
         for (int a = 2; a < argc; ++a) {
             if (!strcmp(argv[a], "--epochs") && a+1 < argc) { epochs = atoi(argv[++a]); }
@@ -82,6 +84,7 @@ int main(int argc, char **argv) {
             else if (!strcmp(argv[a], "--dataset") && a+1 < argc) { dataset = argv[++a]; }
             else if (!strcmp(argv[a], "--layers") && a+1 < argc) { layers_hidden = atoi(argv[++a]); }
             else if (!strcmp(argv[a], "--units") && a+1 < argc) { units_cnt = parse_units(argv[++a], units_arr, 8); }
+            else if (!strcmp(argv[a], "--out") && a+1 < argc) { out_path = argv[++a]; }
         }
 
         if (strcmp(dataset, "xor") != 0) {
@@ -138,6 +141,14 @@ int main(int argc, char **argv) {
             if (acc >= 0.95f) { puts("[train] reached >=95% accuracy — stopping early."); break; }
         }
 
+        if (out_path) {
+            if (io_save_mlp(&m, out_path) == 0) {
+                printf("[save] wrote model to %s\n", out_path);
+            } else {
+                fprintf(stderr, "[save] failed to write %s\n", out_path);
+            }
+        }
+
         // cleanup
         tensor_free(&logits); tensor_free(&x);
         for (int l=0;l<m.L;l++){ tensor_free(&db[l]); tensor_free(&dW[l]); }
@@ -146,9 +157,31 @@ int main(int argc, char **argv) {
         return 0;
     }
 
-
     if (strcmp(argv[1], "predict") == 0) {
-        puts("[predict] subcommand recognized (flags parsed later).");
+        const char *model_path = NULL;
+        for (int a = 2; a < argc; ++a) {
+            if (!strcmp(argv[a], "--model") && a+1 < argc) { model_path = argv[++a]; }
+        }
+        if (!model_path) { fprintf(stderr, "usage: ./perceptron predict --model path\n"); return 2; }
+
+        MLP m = {0};
+        if (io_load_mlp(&m, model_path) != 0) { fprintf(stderr, "load failed: %s\n", model_path); return 1; }
+
+        Dataset d = load_dataset("xor");
+        Tensor x = tensor_alloc(1, m.d_in);
+        Tensor logits = tensor_alloc(1, m.d_out);
+
+        int correct = 0;
+        for (int i = 0; i < d.n; ++i) {
+            x.data[0] = d.X[2*i + 0];
+            x.data[1] = d.X[2*i + 1];
+            mlp_forward_logits(&m, &x, &logits);
+            if (argmax(&logits) == d.y[i]) correct++;
+        }
+        printf("[predict] XOR accuracy: %.2f%% (%d/%d)\n", 100.0f*correct/d.n, correct, d.n);
+
+        tensor_free(&logits); tensor_free(&x);
+        mlp_free(&m);
         return 0;
     }
 
