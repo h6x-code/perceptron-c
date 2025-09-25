@@ -24,7 +24,7 @@ clang -std=c11 -O2 -Wall -Wextra -pedantic src/*.c -o perceptron -lm
 
 ### valgrind shows no leaks:
 ```bash
-valgrind --leak-check=full ./perceptron tensor-test 1337
+valgrind --leak-check=full ./perceptron nn-test
 ```
 
 - Expect: All heap blocks were freed -- no leaks are possible.
