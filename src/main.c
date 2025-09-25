@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "data.h"
+#include "nn.h"
 #include "tensor.h"
 
 static void usage(void) {
@@ -37,6 +38,10 @@ int main(int argc, char **argv) {
         tensor_randu(&t, seed); float s1=0; for(int i=0;i<6;i++) s1 += t.data[i];
         printf("[tensor] seed=%u sum_zero=%.1f sum_rand=%.6f\n", seed, s0, s1);
         tensor_free(&t); return 0;
+    }
+    if (strcmp(argv[1], "nn-test") == 0) {
+        nn_test(); 
+        return 0; 
     }
     fprintf(stderr, "error: unknown subcommand '%s'\n", argv[1]);
     usage();

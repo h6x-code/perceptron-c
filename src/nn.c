@@ -1,5 +1,6 @@
 #include "nn.h"
 #include <math.h>
+#include <stdio.h>
 
 // Forward pass for a dense layer: out = xW + b
 void dense_forward(const Tensor *x, const Tensor *W, const Tensor *b, Tensor *o) {
