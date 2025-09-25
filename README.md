@@ -17,9 +17,7 @@ clang -std=c11 -O2 -Wall -Wextra -pedantic src/*.c -o perceptron
 ## Success criteria (expected output)
 
 ### ./perceptron tensor-test [seed] prints something like:
-```
-[tensor] 2x3 sum_zero=0.0 sum_rand=0.123
-```
+`[tensor] 2x3 sum_zero=0.0 sum_rand=0.123`
 
 - sum_zero must be exactly 0.0.
 
@@ -30,4 +28,4 @@ clang -std=c11 -O2 -Wall -Wextra -pedantic src/*.c -o perceptron
 valgrind --leak-check=full ./perceptron tensor-test 1337
 ```
 
-Expect: All heap blocks were freed -- no leaks are possible.
+- Expect: All heap blocks were freed -- no leaks are possible.
