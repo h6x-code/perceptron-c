@@ -22,13 +22,21 @@ Tensor tensor_alloc(int rows, int cols) {
   Free tensor memory and null the pointer.
   Safe to call multiple times; no-op if data is already NULL.
 */
-void tensor_free(Tensor *t) {
+void tensor_free(Tensor *t)
+{
     if (!t) return;
+
+    // if already freed or never allocated, do nothing
     if (t->data) {
         free(t->data);
         t->data = NULL;
     }
+
+    // make future frees safe and signal "empty"
+    t->rows = 0;
+    t->cols = 0;
 }
+
 
 /*
   Fill tensor with zeros.
