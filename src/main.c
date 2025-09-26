@@ -329,7 +329,8 @@ int main(int argc, char **argv) {
         Tensor vx = (Tensor){0};
         Tensor vlogits = (Tensor){0};
         ThreadSlot *th = NULL;
-        int T = threads;    
+        int T = threads;
+        if (T < 1) T = 1;
 
         // Initialize validation workspace/tensors once (if we have a validation split)
         if (n_val > 0) {
@@ -337,30 +338,60 @@ int main(int argc, char **argv) {
                 fprintf(stderr, "[train] failed to init validation workspace\n");
                 goto train_cleanup;
             }
-            vx      = tensor_alloc(1, m.d_in);
+            vx = tensor_alloc(1, m.d_in);
             vlogits = tensor_alloc(1, m.d_out);
             if (!vx.data || !vlogits.data) {
                 fprintf(stderr, "[train] OOM allocating validation tensors\n");
                 goto train_cleanup;
             }
-            if (!x.data) x = tensor_alloc(1, m.d_in);
-            if (!logits.data) logits = tensor_alloc(1, m.d_out);
-            if (!x.data || !logits.data) {
-                fprintf(stderr, "[train] OOM allocating shared training tensors\n");
-                goto train_cleanup;
-            }
         }
 
         // (Optional) allocate shared training x/logits if you use them outside threads
+        x = tensor_alloc(1, m.d_in);
+        logits = tensor_alloc(1, m.d_out);
+        if (!x.data || !logits.data) {
+            fprintf(stderr, "[train] OOM allocating shared training tensors\n");
+            goto train_cleanup;
+        }
 
-        // Allocate per-thread slots
-        T = threads;
-        th = calloc((size_t)T, sizeof(ThreadSlot));
+        // Allocate and initialize thread slots
+        th = calloc((size_t)T, sizeof(*th));
+        if (!th) { fprintf(stderr, "[train] OOM allocating thread slots\n"); goto train_cleanup; }
+
         for (int t = 0; t < T; ++t) {
-            mlpws_init(&th[t].ws, &m);
-            th[t].x = tensor_alloc(1, m.d_in);
+            // Per-thread workspace for forward
+            th[t].ws = (MLPWS){0};
+            if (mlpws_init(&th[t].ws, &m) != 0) {
+                fprintf(stderr, "[train] failed to init thread workspace (t=%d)\n", t);
+                goto train_cleanup;
+            }
+
+            // Per-thread input/logits tensors
+            th[t].x      = tensor_alloc(1, m.d_in);
             th[t].logits = tensor_alloc(1, m.d_out);
-            alloc_param_like(&m, &th[t].dW_local, &th[t].db_local);
+            if (!th[t].x.data || !th[t].logits.data) {
+                fprintf(stderr, "[train] OOM allocating thread tensors (t=%d)\n", t);
+                goto train_cleanup;
+            }
+
+            // Per-thread local gradient accumulators (one per layer)
+            th[t].dW_local = calloc((size_t)m.L, sizeof(Tensor));
+            th[t].db_local = calloc((size_t)m.L, sizeof(Tensor));
+            if (!th[t].dW_local || !th[t].db_local) {
+                fprintf(stderr, "[train] OOM allocating thread grad arrays (t=%d)\n", t);
+                goto train_cleanup;
+            }
+            for (int l = 0; l < m.L; ++l) {
+                // match dimensions of model parameters
+                th[t].dW_local[l] = tensor_alloc(m.W[l].rows, m.W[l].cols);
+                th[t].db_local[l] = tensor_alloc(1,            m.b[l].cols);
+                if (!th[t].dW_local[l].data || !th[t].db_local[l].data) {
+                    fprintf(stderr, "[train] OOM allocating thread grads (t=%d, l=%d)\n", t, l);
+                    goto train_cleanup;
+                }
+                tensor_zero(&th[t].dW_local[l]);
+                tensor_zero(&th[t].db_local[l]);
+            }
         }
 
         // Grad buffers aligned to layers
@@ -475,7 +506,6 @@ int main(int argc, char **argv) {
                     mlp_forward_logits_ws(&m, &vx, &vlogits, &val_ws);
                     if (argmax(&vlogits) == d.y[i]) correct_val++;
                 }
-
             }
 
             double e_s = (now_ms() - e0) / 1000.0;
@@ -543,7 +573,7 @@ int main(int argc, char **argv) {
         // Unified cleanup: all early exits should 'goto train_cleanup;'
         train_cleanup:
         {
-            // ---- threads: free in the correct order (elements, then arrays) ----
+            // Threads: free in the correct order
             if (th) {
                 for (int t = 0; t < T; ++t) {
                     if (th[t].dW_local) {
@@ -560,26 +590,21 @@ int main(int argc, char **argv) {
                     tensor_free(&th[t].x);
                     mlpws_free(&th[t].ws);
                 }
-                free(th);
-                th = NULL;
+                free(th); th = NULL;
             }
 
-            // ---- validation workspace/tensors ----
+            // Validation tensors/workspace
             tensor_free(&vlogits);
             tensor_free(&vx);
             mlpws_free(&val_ws);
 
-            // ---- shared training tensors ----
+            // Shared training tensors
             tensor_free(&logits);
             tensor_free(&x);
 
-            // ---- model & dataset ----
             mlp_free(&m);
             dataset_free(&d);
-
-            // If you distinguish success/error codes, you can track a status int.
-            // For the simple case, just return 0 here:
-            return 0;
+            return 0;    // or a status variable if you track errors vs success
         }
     }
 
