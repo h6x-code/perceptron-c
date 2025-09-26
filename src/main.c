@@ -725,6 +725,108 @@ int main(int argc, char **argv) {
     }
 
 
+    if (strcmp(argv[1], "eval") == 0) {
+        const char *model_path = NULL;
+        const char *images_path = NULL;
+        const char *labels_path = NULL;
+
+        // parse args
+        for (int i = 2; i < argc; ++i) {
+            if (!strcmp(argv[i], "--model") && i+1 < argc) {
+                model_path = argv[++i];
+            } else if (!strcmp(argv[i], "--mnist-images") && i+1 < argc) {
+                images_path = argv[++i];
+            } else if (!strcmp(argv[i], "--mnist-labels") && i+1 < argc) {
+                labels_path = argv[++i];
+            } else if (!strcmp(argv[i], "--help")) {
+                fprintf(stderr,
+                    "Usage: %s eval --model <file> "
+                    "--mnist-images <idx3-ubyte> --mnist-labels <idx1-ubyte>\n",
+                    argv[0]);
+                return 0;
+            }
+        }
+
+        if (!model_path || !images_path || !labels_path) {
+            fprintf(stderr,
+                "eval: require --model, --mnist-images, --mnist-labels\n");
+            return 1;
+        }
+
+        // load model
+        MLP m = (MLP){0};
+        if (io_load_mlp(&m, model_path) != 0) {
+            fprintf(stderr, "[eval] failed to load model: %s\n", model_path);
+            return 1;
+        }
+
+        // load MNIST idx dataset
+        Dataset d = {0};
+        // limit=0 -> no limit (use all)
+        if (dataset_load_mnist_idx(images_path, labels_path, /*limit=*/0, &d) != 0) {
+            fprintf(stderr, "[eval] MNIST IDX load failed.\n");
+            mlp_free(&m);
+            return 1;
+        }
+
+        if (d.d != m.d_in) {
+            fprintf(stderr, "[eval] feature dim mismatch: model d_in=%d, data d=%d\n",
+                    m.d_in, d.d);
+            dataset_free(&d);
+            mlp_free(&m);
+            return 1;
+        }
+
+        // allocate work
+        Tensor x      = tensor_alloc(1, m.d_in);
+        Tensor logits = tensor_alloc(1, m.d_out);
+        if (!x.data || !logits.data) {
+            fprintf(stderr, "[eval] OOM allocating tensors\n");
+            if (x.data) tensor_free(&x);
+            if (logits.data) tensor_free(&logits);
+            dataset_free(&d);
+            mlp_free(&m);
+            return 1;
+        }
+
+        MLPWS ws = {0};
+        if (mlpws_init(&ws, &m) != 0) {
+            fprintf(stderr, "[eval] failed to init workspace\n");
+            tensor_free(&logits);
+            tensor_free(&x);
+            dataset_free(&d);
+            mlp_free(&m);
+            return 1;
+        }
+
+        // run evaluation
+        double loss_sum = 0.0;
+        int correct = 0;
+
+        for (int i = 0; i < d.n; ++i) {
+            const float *row = &d.X[(size_t)i * (size_t)d.d];
+            for (int j = 0; j < d.d; ++j) x.data[j] = row[j];
+
+            mlp_forward_logits_ws(&m, &x, &logits, &ws);
+            float L = cross_entropy_from_logits(&logits, d.y[i]);
+            loss_sum += L;
+
+            if (argmax(&logits) == d.y[i]) correct++;
+        }
+
+        printf("[eval] n=%d loss=%.6f acc=%.2f%%\n",
+            d.n, (float)(loss_sum / (double)d.n), 100.0f * (float)correct / (float)d.n);
+
+        // cleanup
+        mlpws_free(&ws);
+        tensor_free(&logits);
+        tensor_free(&x);
+        dataset_free(&d);
+        mlp_free(&m);
+        return 0;
+    }
+
+
     if (strcmp(argv[1], "tensor-test") == 0) {
         if (argc < 3) { fprintf(stderr, "usage: ./perceptron tensor-test <seed>\n"); return 2; }
         unsigned seed = (unsigned)strtoul(argv[2], NULL, 10);
