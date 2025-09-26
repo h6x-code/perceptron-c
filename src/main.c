@@ -145,11 +145,6 @@ static void alloc_like_params(const MLP *m, Tensor **W, Tensor **b) {
     }
 }
 
-static void free_params(Tensor *W, Tensor *b, int L) {
-    for (int l = 0; l < L; ++l) { tensor_free(&W[l]); tensor_free(&b[l]); }
-    free(W); free(b);
-}
-
 static void copy_params(Tensor *dstW, Tensor *dstB, const Tensor *srcW, const Tensor *srcB, int L) {
     for (int l = 0; l < L; ++l) {
         int nW = srcW[l].rows * srcW[l].cols;
@@ -252,11 +247,6 @@ int main(int argc, char **argv) {
         int lr_step = 0;    // 0 = never
         int patience = 0;   // 0 = disabled
         int threads = 1;
-        Tensor x = (Tensor){0};
-        Tensor logits = (Tensor){0};
-        MLPWS val_ws = (MLPWS){0};
-        Tensor vx = (Tensor){0};
-        Tensor vlogits = (Tensor){0};
 
         for (int a = 2; a < argc; ++a) {
             if (!strcmp(argv[a], "--epochs") && a+1 < argc) { epochs = atoi(argv[++a]); }
@@ -333,6 +323,14 @@ int main(int argc, char **argv) {
             fprintf(stderr, "mlp_init failed\n"); dataset_free(&d); return 1;
         }
 
+        Tensor x = (Tensor){0};
+        Tensor logits = (Tensor){0};
+        MLPWS val_ws = (MLPWS){0};
+        Tensor vx = (Tensor){0};
+        Tensor vlogits = (Tensor){0};
+        ThreadSlot *th = NULL;
+        int T = threads;    
+
         // Initialize validation workspace/tensors once (if we have a validation split)
         if (n_val > 0) {
             if (mlpws_init(&val_ws, &m) != 0) {
@@ -345,19 +343,19 @@ int main(int argc, char **argv) {
                 fprintf(stderr, "[train] OOM allocating validation tensors\n");
                 goto train_cleanup;
             }
+            if (!x.data) x = tensor_alloc(1, m.d_in);
+            if (!logits.data) logits = tensor_alloc(1, m.d_out);
+            if (!x.data || !logits.data) {
+                fprintf(stderr, "[train] OOM allocating shared training tensors\n");
+                goto train_cleanup;
+            }
         }
 
         // (Optional) allocate shared training x/logits if you use them outside threads
-        if (!x.data)      x      = tensor_alloc(1, m.d_in);
-        if (!logits.data) logits = tensor_alloc(1, m.d_out);
-        if (!x.data || !logits.data) {
-            fprintf(stderr, "[train] OOM allocating shared training tensors\n");
-            goto train_cleanup;
-        }
 
         // Allocate per-thread slots
-        int T = threads;
-        ThreadSlot *th = (ThreadSlot*)calloc((size_t)T, sizeof(ThreadSlot));
+        T = threads;
+        th = calloc((size_t)T, sizeof(ThreadSlot));
         for (int t = 0; t < T; ++t) {
             mlpws_init(&th[t].ws, &m);
             th[t].x = tensor_alloc(1, m.d_in);
