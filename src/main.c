@@ -257,8 +257,6 @@ int main(int argc, char **argv) {
         MLPWS val_ws = (MLPWS){0};
         Tensor vx = (Tensor){0};
         Tensor vlogits = (Tensor){0};
-        ThreadSlot *th = NULL;
-        int T = threads;
 
         for (int a = 2; a < argc; ++a) {
             if (!strcmp(argv[a], "--epochs") && a+1 < argc) { epochs = atoi(argv[++a]); }
@@ -379,8 +377,8 @@ int main(int argc, char **argv) {
             db_tmp[l] = tensor_alloc(1, m.b[l].cols);
         }
 
-        Tensor x = tensor_alloc(1, m.d_in);
-        Tensor logits = tensor_alloc(1, m.d_out);
+        x = tensor_alloc(1, m.d_in);
+        logits = tensor_alloc(1, m.d_out);
 
         SGD_Momentum optm = {0};
         int use_momentum = (momentum > 0.0f);
