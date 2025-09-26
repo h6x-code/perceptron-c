@@ -8,6 +8,6 @@ for t in 1 2 4 8 16; do
     --layers 2 --units 256,64 \
     --epochs 10 --batch 128 --lr 0.05 --momentum 0.9 \
     --lr-decay 0.95 --lr-step 2 \
-    --threads $t --seed 1337 \
+    --seed 1337 --threads $t \
     | tee logs/thread${t}.log
 done

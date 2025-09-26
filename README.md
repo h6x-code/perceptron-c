@@ -1,6 +1,6 @@
 # perceptron-c
 
-A simple multi-layer perceptron (MLP) written in C.  
+A modular multi-layer perceptron (MLP) written in C.  
 Supports training on MNIST data, inference on CSV input, and multi-threaded training.
 
 Built as an educational project: the code emphasizes clarity, memory safety (Valgrind clean), and understanding of how forward/backward propagation, cross-entropy, and SGD actually work at a low level.
@@ -73,9 +73,9 @@ Download MNIST (not included in repo), then:
   --dataset mnist \
   --mnist-images data/MNIST/raw/train-images-idx3-ubyte \
   --mnist-labels data/MNIST/raw/train-labels-idx1-ubyte \
-  --val 0.1 \
+  --limit 10000 --val 0.1 \
   --layers 2 --units 256,64 \
-  --epochs 50 \
+  --epochs 40 \
   --batch 128 --threads 8 \
   --lr 0.05 --momentum 0.9 \
   --lr-decay 0.9 --lr-step 3 --patience 10 \
@@ -90,6 +90,11 @@ Download MNIST (not included in repo), then:
 ./perceptron predict \
   --model data/out/mnist-2layer.bin \
   --input csv:test.csv --csv-has-header
+```
+
+Or, for MNIST test set:
+```bash
+
 ```
 
 ---
