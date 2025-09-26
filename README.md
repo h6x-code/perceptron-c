@@ -57,7 +57,7 @@ Download MNIST (not included in repo), then:
   --layers 1 --units 64 \
   --epochs 10 \
   --lr 0.05 --batch 128 --momentum 0.9 \
-  --lr-decay 0.95 --lr-step 3 --patience 10 \
+  --lr-decay 0.95 --lr-step 3 \
   --seed 1337 \
   --out data/out/model.bin
 ```

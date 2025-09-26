@@ -328,18 +328,18 @@ int main(int argc, char **argv) {
             fprintf(stderr, "mlp_init failed\n"); dataset_free(&d); return 1;
         }
 
-        // Validation workspace (used for single-threaded val forward)
+        // validation workspace and tensors
         MLPWS val_ws = (MLPWS){0};
         if (n_val > 0) {
             if (mlpws_init(&val_ws, &m) != 0) {
                 fprintf(stderr, "[train] failed to init validation workspace\n");
-                // make sure to clean up and exit similarly to your other early-returns:
-                // e.g., dataset_free(&d); mlp_free(&m); return 1;
-                dataset_free(&d);
                 mlp_free(&m);
+                dataset_free(&d);
                 return 1;
             }
         }
+        Tensor vx = tensor_alloc(1, m.d_in);
+        Tensor vlogits = tensor_alloc(1, m.d_out);
 
         // Allocate per-thread slots
         int T = threads;
@@ -458,12 +458,12 @@ int main(int argc, char **argv) {
                 for (int t = 0; t < n_val; ++t) {
                     int i = idx_val[t];
                     const float *row = &d.X[(size_t)i * (size_t)d.d];
-                    for (int j = 0; j < d.d; ++j) x.data[j] = row[j];
+                    for (int j = 0; j < m.d_in; ++j) vx.data[j] = row[j];
 
-                    int y = d.y[i];
-                    mlp_forward_logits_ws(&m, &x, &logits, &val_ws);
-                    if (argmax(&logits) == y) correct_val++;
+                    mlp_forward_logits_ws(&m, &vx, &vlogits, &val_ws);
+                    if (argmax(&vlogits) == d.y[i]) correct_val++;
                 }
+
             }
 
             double e_s = (now_ms() - e0) / 1000.0;
@@ -534,7 +534,10 @@ int main(int argc, char **argv) {
         for (int l = 0; l < m.L; ++l) { tensor_free(&db[l]); tensor_free(&dW[l]); }
         free(db);
         free(dW);
-        if (n_val > 0) { mlpws_free(&val_ws); }
+        tensor_free(&vlogits);
+        tensor_free(&vx);
+        if (n_val > 0) mlpws_free(&val_ws);
+
 
         // Free threads
         for (int t = 0; t < T; ++t) {
