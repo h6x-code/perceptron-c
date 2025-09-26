@@ -608,6 +608,8 @@ int main(int argc, char **argv) {
             if (bestW) { for (int l = 0; l < m.L; ++l) tensor_free(&bestW[l]); free(bestW); bestW = NULL; }
             if (bestB) { for (int l = 0; l < m.L; ++l) tensor_free(&bestB[l]); free(bestB); bestB = NULL; }
 
+            if (idx_all) free(idx_all);
+
             mlp_free(&m);
             dataset_free(&d);
 
