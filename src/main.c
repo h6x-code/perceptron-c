@@ -145,11 +145,6 @@ static void alloc_like_params(const MLP *m, Tensor **W, Tensor **b) {
     }
 }
 
-static void free_like_params(Tensor *P, int L) {
-    if (!P) return;
-    for (int l = 0; l < L; ++l) tensor_free(&P[l]);
-    free(P);
-}
 
 static void copy_params(Tensor *dstW, Tensor *dstB, const Tensor *srcW, const Tensor *srcB, int L) {
     for (int l = 0; l < L; ++l) {
@@ -222,8 +217,6 @@ static void predict_range(int start, int end, void *user) {
         C->pred[i] = best;
         C->conf[i] = bestp;
     }
-    tensor_free(&logits);
-    tensor_free(&x);
 }
 
 int main(int argc, char **argv) {
@@ -283,6 +276,30 @@ int main(int argc, char **argv) {
         for (int i=0;i<units_cnt;i++) printf("%s%d", (i?",":""), units_arr[i]);
         printf(" epochs=%d lr=%.4f seed=%u val=%.2f batch=%d mom=%.2f decay=%.3f step=%d patience=%d\n", epochs, lr, seed, val_frac, batch, momentum, lr_decay, lr_step, patience);
 
+        // --- inside `if (strcmp(argv[1],"train")==0) {` near the start of training variables ---
+        MLP m = {0};
+
+        // global training scratch (single-thread path *and* used by thread slices if you share them)
+        Tensor x = (Tensor){0};
+        Tensor logits = (Tensor){0};
+
+        // optional validation scratch
+        Tensor vx = (Tensor){0};
+        Tensor vlogits = (Tensor){0};
+        MLPWS val_ws = {0};
+
+        // per-layer gradient accumulators
+        Tensor *dW = NULL, *db = NULL;
+
+        // momentum
+        SGD_Momentum optm = {0};
+        int use_momentum = (momentum > 0.f);
+
+        // threading
+        ThreadSlot *th = NULL;      // IMPORTANT: start NULL
+        int T = threads;            // your --threads
+
+
         // Dataset + fixed split
         Dataset d = {0};
 
@@ -324,18 +341,10 @@ int main(int argc, char **argv) {
         int *idx_train = idx_all + n_val;  // remainder
 
         // Model + grads
-        MLP m = (MLP){0};
         if (mlp_init(&m, /*d_in=*/d.d, /*d_out=*/d.k, units_arr, units_cnt, seed) != 0) {
             fprintf(stderr, "mlp_init failed\n"); dataset_free(&d); return 1;
         }
 
-        Tensor x = (Tensor){0};
-        Tensor logits = (Tensor){0};
-        MLPWS val_ws = (MLPWS){0};
-        Tensor vx = (Tensor){0};
-        Tensor vlogits = (Tensor){0};
-        ThreadSlot *th = NULL;
-        int T = threads;
         if (T < 1) T = 1;
 
         // Initialize validation workspace/tensors once (if we have a validation split)
@@ -401,8 +410,12 @@ int main(int argc, char **argv) {
         }
 
         // Grad buffers aligned to layers
-        Tensor *dW = (Tensor*)malloc(m.L * sizeof(Tensor));
-        Tensor *db = (Tensor*)malloc(m.L * sizeof(Tensor));
+        dW = (Tensor*)malloc(m.L * sizeof(Tensor));
+        db = (Tensor*)malloc(m.L * sizeof(Tensor));
+        if (!dW || !db) { 
+            fprintf(stderr, "[train] OOM grad buffers\n");
+            goto train_cleanup; 
+        }
         for (int l=0;l<m.L;l++){ dW[l]=tensor_alloc(m.W[l].rows,m.W[l].cols); db[l]=tensor_alloc(1,m.b[l].cols); }
 
         Tensor *dW_tmp = (Tensor*)malloc(m.L * sizeof(Tensor));
@@ -415,8 +428,7 @@ int main(int argc, char **argv) {
         x = tensor_alloc(1, m.d_in);
         logits = tensor_alloc(1, m.d_out);
 
-        SGD_Momentum optm = {0};
-        int use_momentum = (momentum > 0.0f);
+        use_momentum = (momentum > 0.0f);
         if (use_momentum) {
             if (sgd_momentum_init(&optm, m.L, m.W, m.b, momentum) != 0) {
                 fprintf(stderr, "[train] OOM: momentum state\n");
@@ -519,7 +531,6 @@ int main(int argc, char **argv) {
             double e_s = (now_ms() - e0) / 1000.0;
             float acc_tr = (float)correct_train / (float)n_train;
             float acc_va = (n_val>0) ? ((float)correct_val / (float)n_val) : NAN;
-            mlpws_free(&val_ws);
 
             // Choose the metric: prefer validation if present
             float metric = (n_val > 0) ? acc_va : acc_tr;
