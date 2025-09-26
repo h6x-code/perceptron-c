@@ -288,9 +288,6 @@ int main(int argc, char **argv) {
         Tensor vlogits = (Tensor){0};
         MLPWS val_ws = {0};
 
-        // per-layer gradient accumulators
-        Tensor *dW = NULL, *db = NULL;
-
         // momentum
         SGD_Momentum optm = {0};
         int use_momentum = (momentum > 0.f);
@@ -409,25 +406,6 @@ int main(int argc, char **argv) {
             }
         }
 
-        // Grad buffers aligned to layers
-        dW = (Tensor*)malloc(m.L * sizeof(Tensor));
-        db = (Tensor*)malloc(m.L * sizeof(Tensor));
-        if (!dW || !db) { 
-            fprintf(stderr, "[train] OOM grad buffers\n");
-            goto train_cleanup; 
-        }
-        for (int l=0;l<m.L;l++){ dW[l]=tensor_alloc(m.W[l].rows,m.W[l].cols); db[l]=tensor_alloc(1,m.b[l].cols); }
-
-        Tensor *dW_tmp = (Tensor*)malloc(m.L * sizeof(Tensor));
-        Tensor *db_tmp = (Tensor*)malloc(m.L * sizeof(Tensor));
-        for (int l = 0; l < m.L; ++l) {
-            dW_tmp[l] = tensor_alloc(m.W[l].rows, m.W[l].cols);
-            db_tmp[l] = tensor_alloc(1, m.b[l].cols);
-        }
-
-        x = tensor_alloc(1, m.d_in);
-        logits = tensor_alloc(1, m.d_out);
-
         use_momentum = (momentum > 0.0f);
         if (use_momentum) {
             if (sgd_momentum_init(&optm, m.L, m.W, m.b, momentum) != 0) {
@@ -477,42 +455,46 @@ int main(int argc, char **argv) {
                 for (int t = 0; t < TT; ++t) pthread_join(pth[t], NULL);
 
                 // Deterministic Kahan reduction in double; write averaged grads directly
-                Tensor *dW = NULL, *db = NULL; alloc_param_like(&m, &dW, &db);
+                Tensor *dW_acc = NULL, *db_acc = NULL; 
+                alloc_param_like(&m, &dW_acc, &db_acc);
+
                 const float invB = 1.0f / (float)B;
                 for (int l = 0; l < m.L; ++l) {
                     const int nW = m.W[l].rows * m.W[l].cols;
                     const int nb = m.b[l].cols;
+
                     for (int i = 0; i < nW; ++i) {
                         double sum = 0.0, c = 0.0;
                         for (int t = 0; t < TT; ++t) {
                             double y = (double)th[t].dW_local[l].data[i] - c;
                             double tmp = sum + y; c = (tmp - sum) - y; sum = tmp;
                         }
-                        dW[l].data[i] = (float)(sum * (double)invB);
+                        dW_acc[l].data[i] = (float)(sum * (double)invB);
                     }
+
                     for (int j = 0; j < nb; ++j) {
                         double sum = 0.0, c = 0.0;
                         for (int t = 0; t < TT; ++t) {
                             double y = (double)th[t].db_local[l].data[j] - c;
                             double tmp = sum + y; c = (tmp - sum) - y; sum = tmp;
                         }
-                        db[l].data[j] = (float)(sum * (double)invB);
+                        db_acc[l].data[j] = (float)(sum * (double)invB);
                     }
                 }
 
                 // one optimizer step using averaged grads
-                if (use_momentum) sgd_momentum_step(&optm, m.W, m.b, dW, db, lr);
-                else              mlp_sgd_step(&m, dW, db, lr);
-                free_param_stack(dW, db, m.L);  // this frees the temporary reduction buffers only
-
+                if (use_momentum) sgd_momentum_step(&optm, m.W, m.b, dW_acc, db_acc, lr);
+                else              mlp_sgd_step(&m, dW_acc, db_acc, lr);
 
                 // batch stats
                 int corr = 0; float lsum = 0.0f;
                 for (int t = 0; t < TT; ++t) { corr += th[t].correct; lsum += th[t].loss; }
                 correct_train += corr; loss_sum += lsum;
 
-                free_param_stack(dW, db, m.L);
-                free(pth); free(S);
+                free_param_stack(dW_acc, db_acc, m.L);
+                free(pth);
+                free(S);
+
             }
 
             // validation (if any)
@@ -622,10 +604,15 @@ int main(int argc, char **argv) {
             tensor_free(&logits);
             tensor_free(&x);
 
+            // Free best snapshot (if allocated)
+            if (bestW) { for (int l = 0; l < m.L; ++l) tensor_free(&bestW[l]); free(bestW); bestW = NULL; }
+            if (bestB) { for (int l = 0; l < m.L; ++l) tensor_free(&bestB[l]); free(bestB); bestB = NULL; }
+
             mlp_free(&m);
             dataset_free(&d);
 
             sgd_momentum_free(&optm);
+
 
             return 0;    // or a status variable if you track errors vs success
         }
