@@ -1,24 +1,32 @@
-#pragma once
+#ifndef OPT_H
+#define OPT_H
+
 #include "tensor.h"
 
+// Simple SGD + momentum optimizer state.
+// mu = momentum coefficient in [0, 1)
 typedef struct {
-    float mu;     // momentum coefficient in [0,1)
-    Tensor *vW;   // per-layer velocity for W
-    Tensor *vb;   // per-layer velocity for b
-    int L;        // number of layers
+    int L;          // number of layers
+    Tensor *vW;     // velocity for weights, length L
+    Tensor *vB;     // velocity for biases,  length L
+    float mu;       // momentum coefficient
 } SGD_Momentum;
 
-// Initialize momentum buffers matching model shapes
-int sgd_momentum_init(SGD_Momentum *opt, int L, Tensor *W, Tensor *b, float mu);
+// Initialize momentum buffers shaped like W[l]/b[l] and zero them.
+// Returns 0 on success, nonzero on OOM.
+int sgd_momentum_init(SGD_Momentum *opt, int L,
+                      const Tensor *W, const Tensor *b,
+                      float mu);
 
-// Free momentum buffers
+// One SGD+momentum update:
+// v = mu * v - lr * grad
+// param += v
+void sgd_momentum_step(SGD_Momentum *opt,
+                       Tensor *W, Tensor *B,
+                       Tensor *dW, Tensor *dB,
+                       float lr);
+
+// Free all momentum buffers.
 void sgd_momentum_free(SGD_Momentum *opt);
 
-// Vanilla SGD: theta -= lr * grad
-void sgd_step_params(Tensor *W, Tensor *b, Tensor *dW, Tensor *db, int L, float lr);
-
-// Momentum SGD: v = mu*v + dtheta; theta -= lr * v
-void sgd_momentum_step(SGD_Momentum *opt, Tensor *W, Tensor *b, Tensor *dW, Tensor *db, float lr);
-
-// Zero a stack of gradient tensors
-void zero_grads(Tensor *dW, Tensor *db, int L);
+#endif // OPT_H

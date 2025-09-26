@@ -145,6 +145,12 @@ static void alloc_like_params(const MLP *m, Tensor **W, Tensor **b) {
     }
 }
 
+static void free_like_params(Tensor *P, int L) {
+    if (!P) return;
+    for (int l = 0; l < L; ++l) tensor_free(&P[l]);
+    free(P);
+}
+
 static void copy_params(Tensor *dstW, Tensor *dstB, const Tensor *srcW, const Tensor *srcB, int L) {
     for (int l = 0; l < L; ++l) {
         int nW = srcW[l].rows * srcW[l].cols;
@@ -367,7 +373,7 @@ int main(int argc, char **argv) {
             }
 
             // Per-thread input/logits tensors
-            th[t].x      = tensor_alloc(1, m.d_in);
+            th[t].x = tensor_alloc(1, m.d_in);
             th[t].logits = tensor_alloc(1, m.d_out);
             if (!th[t].x.data || !th[t].logits.data) {
                 fprintf(stderr, "[train] OOM allocating thread tensors (t=%d)\n", t);
@@ -413,7 +419,9 @@ int main(int argc, char **argv) {
         int use_momentum = (momentum > 0.0f);
         if (use_momentum) {
             if (sgd_momentum_init(&optm, m.L, m.W, m.b, momentum) != 0) {
-                fprintf(stderr, "momentum init failed\n"); /* free & exit */ }
+                fprintf(stderr, "[train] OOM: momentum state\n");
+                goto train_cleanup;
+            }
         }
 
         float best_metric = -1.0f;    // best val acc (or train acc if no val)
@@ -482,7 +490,7 @@ int main(int argc, char **argv) {
 
                 // one optimizer step using averaged grads
                 if (use_momentum) sgd_momentum_step(&optm, m.W, m.b, dW, db, lr);
-                else sgd_step_params  (m.W, m.b, dW, db, m.L, lr);
+                else              mlp_sgd_step(&m, dW, db, lr);
                 free_param_stack(dW, db, m.L);  // this frees the temporary reduction buffers only
 
 
@@ -590,7 +598,8 @@ int main(int argc, char **argv) {
                     tensor_free(&th[t].x);
                     mlpws_free(&th[t].ws);
                 }
-                free(th); th = NULL;
+                free(th);
+                th = NULL;
             }
 
             // Validation tensors/workspace
@@ -604,6 +613,9 @@ int main(int argc, char **argv) {
 
             mlp_free(&m);
             dataset_free(&d);
+
+            sgd_momentum_free(&optm);
+
             return 0;    // or a status variable if you track errors vs success
         }
     }

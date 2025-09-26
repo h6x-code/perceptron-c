@@ -1,54 +1,79 @@
-#include "opt.h"
 #include <stdlib.h>
+#include <string.h>
+#include "opt.h"
 
-int sgd_momentum_init(SGD_Momentum *opt, int L, Tensor *W, Tensor *b, float mu) {
-    opt->mu = mu;
+int sgd_momentum_init(SGD_Momentum *opt, int L,
+                      const Tensor *W, const Tensor *b,
+                      float mu)
+{
+    if (!opt || L <= 0 || !W || !b) return -1;
+    memset(opt, 0, sizeof(*opt));
     opt->L  = L;
-    opt->vW = (Tensor*)malloc((size_t)L * sizeof(Tensor));
-    opt->vb = (Tensor*)malloc((size_t)L * sizeof(Tensor));
-    if (!opt->vW || !opt->vb) { free(opt->vW); free(opt->vb); return 1; }
+    opt->mu = mu;
+
+    opt->vW = (Tensor*)calloc((size_t)L, sizeof(Tensor));
+    opt->vB = (Tensor*)calloc((size_t)L, sizeof(Tensor));
+    if (!opt->vW || !opt->vB) return -1;
+
     for (int l = 0; l < L; ++l) {
+        // Weight velocity matches W[l] (rows x cols)
         opt->vW[l] = tensor_alloc(W[l].rows, W[l].cols);
-        opt->vb[l] = tensor_alloc(1, b[l].cols);
+        // Bias velocity matches b[l] (1 x cols)
+        opt->vB[l] = tensor_alloc(b[l].rows, b[l].cols);
+        if (!opt->vW[l].data || !opt->vB[l].data) return -1;
+
         tensor_zero(&opt->vW[l]);
-        tensor_zero(&opt->vb[l]);
+        tensor_zero(&opt->vB[l]);
     }
     return 0;
 }
 
-void sgd_momentum_free(SGD_Momentum *opt) {
-    if (!opt) return;
-    if (opt->vW) { for (int l=0;l<opt->L;l++) tensor_free(&opt->vW[l]); free(opt->vW); }
-    if (opt->vb) { for (int l=0;l<opt->L;l++) tensor_free(&opt->vb[l]); free(opt->vb); }
-    opt->vW = opt->vb = NULL; opt->L = 0; opt->mu = 0.0f;
-}
+void sgd_momentum_step(SGD_Momentum *opt,
+                       Tensor *W, Tensor *B,
+                       Tensor *dW, Tensor *dB,
+                       float lr)
+{
+    // Assumes arrays W/B/dW/dB are length L with matching shapes.
+    if (!opt || !W || !B || !dW || !dB) return;
 
-void zero_grads(Tensor *dW, Tensor *db, int L) {
-    for (int l = 0; l < L; ++l) { tensor_zero(&dW[l]); tensor_zero(&db[l]); }
-}
+    const int L = opt->L;
+    const float mu = opt->mu;
 
-void sgd_step_params(Tensor *W, Tensor *b, Tensor *dW, Tensor *db, int L, float lr) {
     for (int l = 0; l < L; ++l) {
+        // vW = mu*vW - lr*dW; W += vW
         int nW = W[l].rows * W[l].cols;
-        int nb = b[l].cols;
-        for (int i = 0; i < nW; ++i) W[l].data[i] -= lr * dW[l].data[i];
-        for (int j = 0; j < nb; ++j) b[l].data[j] -= lr * db[l].data[j];
+        float *vW = opt->vW[l].data;
+        float *w  = W[l].data;
+        float *gw = dW[l].data;
+        for (int i = 0; i < nW; ++i) {
+            vW[i] = mu * vW[i] - lr * gw[i];
+            w[i] += vW[i];
+        }
+
+        // vB = mu*vB - lr*dB; B += vB
+        int nB = B[l].rows * B[l].cols;
+        float *vB = opt->vB[l].data;
+        float *b  = B[l].data;
+        float *gb = dB[l].data;
+        for (int i = 0; i < nB; ++i) {
+            vB[i] = mu * vB[i] - lr * gb[i];
+            b[i] += vB[i];
+        }
     }
 }
 
-void sgd_momentum_step(SGD_Momentum *opt, Tensor *W, Tensor *b, Tensor *dW, Tensor *db, float lr) {
-    float mu = opt->mu;
-    for (int l = 0; l < opt->L; ++l) {
-        int nW = W[l].rows * W[l].cols;
-        int nb = b[l].cols;
-        // velocities
-        for (int i = 0; i < nW; ++i) {
-            opt->vW[l].data[i] = mu * opt->vW[l].data[i] + dW[l].data[i];
-            W[l].data[i]      -= lr * opt->vW[l].data[i];
-        }
-        for (int j = 0; j < nb; ++j) {
-            opt->vb[l].data[j] = mu * opt->vb[l].data[j] + db[l].data[j];
-            b[l].data[j]      -= lr * opt->vb[l].data[j];
-        }
+void sgd_momentum_free(SGD_Momentum *opt)
+{
+    if (!opt) return;
+    if (opt->vW) {
+        for (int l = 0; l < opt->L; ++l) tensor_free(&opt->vW[l]);
+        free(opt->vW);
+        opt->vW = NULL;
     }
+    if (opt->vB) {
+        for (int l = 0; l < opt->L; ++l) tensor_free(&opt->vB[l]);
+        free(opt->vB);
+        opt->vB = NULL;
+    }
+    opt->L = 0;
 }

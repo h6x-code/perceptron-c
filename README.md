@@ -55,11 +55,11 @@ Download MNIST (not included in repo), then:
   --mnist-labels data/MNIST/raw/train-labels-idx1-ubyte \
   --limit 10000 --val 0.1 \
   --layers 1 --units 64 \
-  --epochs 10 \
-  --lr 0.05 --batch 128 --momentum 0.9 \
-  --lr-decay 0.95 --lr-step 3 \
+  --epochs 1 \
+  --lr 0.05 --batch 32 --momentum 0.9 \
+  --lr-decay 0.95 --lr-step 3 --patience 10 \
   --seed 1337 \
-  --out data/out/model.bin
+  --out data/out/fast.bin
 ```
 
 ---
