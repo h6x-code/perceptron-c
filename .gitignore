@@ -4,3 +4,4 @@ perceptron
 # Obscure data
 data/       
 logs/
+runs/
