@@ -1,50 +1,153 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <title>Perceptron-C Grid Search Results</title>
-  <link rel="stylesheet" href="style.css">
-  <link rel="icon" href="favicon.ico" />
-  <script defer src="https://pyscript.net/latest/pyscript.js"></script>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Perceptron-C | Bench & Viz</title>
+
+  <!-- PyScript core -->
+  <link rel="stylesheet" href="https://pyscript.net/releases/2024.5.1/core.css" />
+  <script type="module" src="https://pyscript.net/releases/2024.5.1/core.js"></script>
+
+  <!-- Your theme stylesheet (the one you sent) -->
+  <!-- Put the file at: docs/assets/style.css -->
+  <link rel="stylesheet" href="assets/style.css" />
 </head>
 <body>
+
   <header class="site-header">
     <div class="container">
       <h1>Perceptron-C</h1>
-      <h2>Hyperparameter Grid Search</h2>
-      <p class="tagline muted">Interactive reports powered by PyScript</p>
+      <h2 class="muted">Hyperparameter Grid Search</Search></h2>
+      <p class="tagline">Analyze grid runs • Compare speed vs accuracy • Interactive charts</p>
     </div>
   </header>
 
   <main class="container">
-    <section class="card">
-      <h3>Upload Results CSV</h3>
-      <label class="file">
-        <input type="file" id="csv-input" accept=".csv" />
-        <span>Choose CSV file</span>
-      </label>
 
-      <div class="progress-wrap">
-        <progress id="csv-progress" value="0" max="100"></progress>
-        <span id="csv-progress-text">0%</span>
+    <div class="status mono small">Status: <span id="status-text">idle</span></div>
+
+    <div class="tabs">
+      <button class="tab active" data-panel="upload">CSV / Logs</button>
+      <button class="tab" data-panel="charts">Charts</button>
+      <button class="tab" data-panel="summary">Summary</button>
+    </div>
+
+    <!-- Upload / Parse panel -->
+    <section id="panel-upload" class="panel active">
+      <div class="card">
+        <label class="label">Load results CSV (from grid_search.sh)</label>
+        <div class="row">
+          <label class="file">
+            <input id="file-input" type="file" accept=".csv" />
+            <span>Choose CSV…</span>
+          </label>
+          <button id="btn-demo" class="primary">Load Demo Data</button>
+        </div>
+
+        <!-- Native progress bar + text to match style.css hooks -->
+        <div class="progress-wrap">
+          <progress id="csv-progress" max="100" value="0"></progress>
+          <span id="csv-progress-text">0%</span>
+        </div>
+
+        <div id="csv-preview" class="log mono small"></div>
       </div>
-
-      <div id="summary" class="log"></div>
     </section>
 
-    <section class="card">
-      <h3>Interactive Charts</h3>
-      <div id="plots"></div>
+    <!-- Charts panel -->
+    <section id="panel-charts" class="panel">
+      <div class="card">
+        <div class="row controls">
+          <div class="inline">
+            <label class="label small">Color by</label>
+            <select id="color-by"></select>
+          </div>
+          <div class="inline">
+            <label class="label small">Mode</label>
+            <select id="color-mode">
+              <option value="auto">auto</option>
+              <option value="continuous">continuous</option>
+              <option value="discrete">discrete</option>
+            </select>
+          </div>
+          <div class="inline" id="bin-controls" style="display:none">
+            <label class="label small">Bins by</label>
+            <select id="bin-strategy">
+              <option value="quantile">quantile</option>
+              <option value="uniform">uniform</option>
+            </select>
+            <label class="label small">#bins</label>
+            <input id="bins-count" type="number" min="2" max="30" step="1" value="8" />
+          </div>
+          <div class="inline">
+            <label class="label small">log x</label>
+            <input id="log-x" type="checkbox" />
+          </div>
+          <div class="inline">
+            <label class="label small">log y</label>
+            <input id="log-y" type="checkbox" />
+          </div>
+        </div>
+
+        <div class="grid-2">
+          <div id="plot-speed-acc" class="result-tile" style="min-height: 420px;"></div>
+          <div id="plot-speed-acc-sigma" class="result-tile" style="min-height: 420px;"></div>
+        </div>
+      </div>
     </section>
+
+    <!-- Summary panel -->
+    <section id="panel-summary" class="panel">
+      <div class="card">
+        <div class="row">
+          <button id="btn-export-md" class="primary">Export grid_data.md</button>
+        </div>
+        <div class="grid-2">
+          <div class="result-tile">
+            <div class="tile-title">Fastest Model</div>
+            <div class="label-big" id="fast-time">—</div>
+            <div class="light small" id="fast-meta">—</div>
+          </div>
+          <div class="result-tile">
+            <div class="tile-title">Best Accuracy</div>
+            <div class="label-big" id="best-acc">—</div>
+            <div class="light small" id="best-meta">—</div>
+          </div>
+        </div>
+        <div id="summary-log" class="log mono small"></div>
+      </div>
+    </section>
+
+    <!-- PyScript app loader -->
+    <!-- Keep app.py at docs/assets/app.py (the earlier file you split out) -->
+    <py-script src="assets/app.py"></py-script>
+
   </main>
 
-  <footer class="foot">
-    <p>Built using PyScript</p>
+  <footer class="foot small">
+    <span id="year"></span> perceptron-c • MNIST bench & viz
   </footer>
 
-  <py-config>
-    packages = ["pandas", "matplotlib", "plotly"]
-  </py-config>
-  <py-script src="app.py"></py-script>
+  <script>
+    // Tabs (match .tab / .panel hooks in style.css)
+    const tabs = document.querySelectorAll('.tab');
+    const panels = {
+      upload: document.getElementById('panel-upload'),
+      charts: document.getElementById('panel-charts'),
+      summary: document.getElementById('panel-summary'),
+    };
+    tabs.forEach(btn => {
+      btn.addEventListener('click', () => {
+        tabs.forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        Object.values(panels).forEach(p => p.classList.remove('active'));
+        panels[btn.dataset.panel].classList.add('active');
+      });
+    });
+    // year
+    document.getElementById('year').textContent = new Date().getFullYear();
+  </script>
+
 </body>
 </html>
