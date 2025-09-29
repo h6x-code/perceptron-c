@@ -50,11 +50,8 @@ python3 scripts/plot_results.py logs/thread1.log logs/threads8.log \
 python3 scripts/plot_results.py logs/thread*.log \
   --out plots/all_threads.png \
   --title "All thread counts" \
-  --ylim-loss 0 0.8 --ylim-acc 80 100 --legend-outside
-
-# Also include a speed vs accuracy scatter
-python3 scripts/plot_results.py logs/*.log \
-  --speed-out plots/speed_vs_accuracy.png
+  --ylim-loss 0 0.8 --ylim-acc 80 100 --legend-outside \
+  --footer time
 ```
 
 ---
