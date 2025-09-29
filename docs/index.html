@@ -42,27 +42,27 @@
 
     <!-- Upload / Parse panel -->
     <section id="panel-upload" class="panel active">
-      <div class="card">
-        <label class="label">Load results CSV (from grid_search.sh)</label>
+    <div class="card">
+        <label class="label">Select results CSV from repo (docs/csv)</label>
+
         <div class="row">
-          <label class="file">
-            <!-- UPDATED ID -->
-            <input id="csv-input" type="file" accept=".csv" />
-            <span>Choose CSV…</span>
-          </label>
-          <button id="btn-demo" class="primary">Load Demo Data</button>
+        <div class="inline">
+            <select id="csv-select"></select>
+        </div>
+        <button id="btn-reload-index" class="secondary">Reload List</button>
+        <button id="btn-load-selected" class="primary">Load Selected</button>
         </div>
 
-        <!-- Native progress bar + text -->
+        <!-- Progress bar + text (reused by app.py) -->
         <div class="progress-wrap">
-          <progress id="csv-progress" max="100" value="0"></progress>
-          <span id="csv-progress-text">0%</span>
+        <progress id="csv-progress" max="100" value="0"></progress>
+        <span id="csv-progress-text">0%</span>
         </div>
 
-        <!-- UPDATED ID -->
-        <div id="summary" class="log mono small"></div>
-      </div>
+        <div id="csv-preview" class="log mono small"></div>
+    </div>
     </section>
+
 
     <!-- Charts panel -->
     <section id="panel-charts" class="panel">

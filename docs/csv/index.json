@@ -1,0 +1,6 @@
+{
+  "files": [
+    "full_mnist_results.csv",
+    "multithreading_results.csv"
+  ]
+}
