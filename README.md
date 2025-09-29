@@ -5,6 +5,8 @@ Supports training on MNIST data, inference on CSV input, and multi-threaded trai
 
 Built as an educational project: the code emphasizes clarity, memory safety (Valgrind clean), and understanding of how forward/backward propagation, cross-entropy, and SGD actually work at a low level.
 
+To make use of `scripts/`, please see the `README.md` located in that folder. `scripts/` contains `.sh`, `.py`, and `.ipynb` files used to analyze model training and results.
+
 ---
 
 ## Features
@@ -23,7 +25,7 @@ Built as an educational project: the code emphasizes clarity, memory safety (Val
 ## Dataset
 
 MNIST: https://github.com/cvdfoundation/mnist
-You’ll need the original MNIST IDX files. Place them under `data/MNIST/raw/` and extract the files. You need raw files not `.gz`.
+You’ll need the original MNIST IDX files. Place them under `data/MNIST/raw/` and extract the files. You cannot use `.gz`.
 
 ---
 
@@ -42,11 +44,9 @@ make
 ## CLI Overview
 
 The binary has several subcommands:
-- `train` – train a model
-- `predict` – run inference from a saved model
-- `tensor-test` – test tensor ops
-- `nn-test` – test neural net forward pass
-- `gradcheck` – gradient check via finite differences
+- `train`: train a model
+- `predict`: run inference from a saved model
+- `eval`: evaluate accuracy on a testing dataset
 
 ### Core flags:
 - `--dataset xor|and|or|mnist|csv:...`
@@ -58,6 +58,7 @@ The binary has several subcommands:
 - `--patience p`: early stopping based on validation accuracy
 - `--out path/to/model.bin`: for saving
 - `--seed S`: deterministic runs
+
 Run `./perceptron --help` for details.
 
 ---
@@ -120,35 +121,6 @@ Evaluate a trained model (loss, accuracy) on a dataset:
 
 ---
 
-## Multithreading performance testing
-### DO NOT RUN THE FOLLOWING WITHOUT ADJUSTING MAX NUMBER OF THREADS FOR YOUR SYSTEM
-Generate log files:
-```bash
-./scripts/bench.sh
-```
-
-Print .md table:
-```bash
-./scripts/parse_bench.py
-```
-### Mini-Training Performance (10k MNIST samples, 2×256,64 MLP, 10 epochs)
-| Threads | Total time (s) | Speedup | Best Val (%) |
-|--------:|---------------:|--------:|-------------:|
-| 1 | 35.80 | 1.00 | 96.60 |
-| 2 | 21.10 | 1.70 | 96.60 |
-| 4 | 12.80 | 2.80 | 96.60 |
-| 8 | 9.60 | 3.73 | 96.60 |
-| 16 | 18.00 | 1.99 | 96.60 |
-
-The helper script `scripts/plot_results.py` can visualize training logs.
-```bash
-python3 scripts/plot_results.py logs/thread*.log \
-  --out plots/all_threads.png \
-  --title "All thread counts"
-```
-
----
-
 ## Additional Commands
 
 ### Run Unit Tests
@@ -161,6 +133,6 @@ python3 scripts/plot_results.py logs/thread*.log \
 ---
 
 ## Tips
-- Always check with valgrind --leak-check=full after code changes.
+- Always check with `valgrind --leak-check=full` after code changes.
 - Use `--seed` for reproducibility.
 - Tune `--batch` and `--threads` for your CPU to get best throughput.
