@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Perceptron-C Grid Search Results</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="icon" href="favicon.ico" />
+  <script defer src="https://pyscript.net/latest/pyscript.js"></script>
+</head>
+<body>
+  <header class="site-header">
+    <div class="container">
+      <h1>Perceptron-C</h1>
+      <h2>Hyperparameter Grid Search</h2>
+      <p class="tagline muted">Interactive reports powered by PyScript</p>
+    </div>
+  </header>
+
+  <main class="container">
+    <section class="card">
+      <h3>Upload Results CSV</h3>
+      <label class="file">
+        <input type="file" id="csv-input" accept=".csv" />
+        <span>Choose CSV file</span>
+      </label>
+
+      <div class="progress-wrap">
+        <progress id="csv-progress" value="0" max="100"></progress>
+        <span id="csv-progress-text">0%</span>
+      </div>
+
+      <div id="summary" class="log"></div>
+    </section>
+
+    <section class="card">
+      <h3>Interactive Charts</h3>
+      <div id="plots"></div>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <p>Built using PyScript</p>
+  </footer>
+
+  <py-config>
+    packages = ["pandas", "matplotlib", "plotly"]
+  </py-config>
+  <py-script src="app.py"></py-script>
+</body>
+</html>
