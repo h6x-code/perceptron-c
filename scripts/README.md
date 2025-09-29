@@ -58,8 +58,18 @@ python3 scripts/plot_results.py logs/thread*.log \
 
 ## Hyperparameter optimization grid search
 ### `grid_search.sh`
-Run a grid of models, capturing train logs, eval logs, and a consolidated CSV with default grid:
+Run a grid of models, capturing train logs, eval logs, and a consolidated CSV with default grid search (n=10000):
 ```bash
+./scripts/grid_search.sh
+```
+
+Run a grid with training on the full train dataset:
+```bash
+LIMIT_TR=60000 \
+VAL_FRAC=0.05 \
+LR_LIST="0.05 0.1" \
+MOM_LIST="0.9 0.94 0.95" \
+DECAY
 ./scripts/grid_search.sh
 ```
 
