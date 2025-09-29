@@ -245,7 +245,7 @@ def plot_speed_vs_accuracy_pareto(rows, outpath: Path, title="Speed vs Accuracy 
         return
 
     # Compute Pareto frontier on the cleaned rows
-    frontier = pareto_frontier(clean, time_key="train_time_s", acc_key="test_acc_pct")
+    frontier = pareto_frontier(clean)
 
     # Unzip points
     xs = [r["train_time_s"] for r in clean]

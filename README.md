@@ -74,7 +74,7 @@ Run `./perceptron --help` for details.
 ```
 
 ### MNIST (IDX format)
-Download MNIST (not included in repo), then:
+Download MNIST (not included in repo), adjust hyperparameters for your experiment, then:
 ```bash
 ./perceptron train \
   --dataset mnist \
@@ -82,10 +82,10 @@ Download MNIST (not included in repo), then:
   --mnist-labels data/MNIST/raw/train-labels-idx1-ubyte \
   --val 0.1 \
   --layers 2 --units 256,64 \
-  --epochs 40 \
-  --batch 128 --threads  \
-  --lr 0.05 --momentum 0.9 \
-  --lr-decay 0.9 --lr-step 3 --patience 10 \
+  --epochs 60 \
+  --batch 256 --threads 8 \
+  --lr 0.1 --momentum 0.92 \
+  --lr-decay 0.98 --lr-step 4 --patience 10 \
   --seed 1337 \
   --out data/out/mnist-2layer.bin
 ```
@@ -120,7 +120,7 @@ Evaluate a trained model (loss, accuracy) on a dataset:
 
 ---
 
-## Multithreading performance
+## Multithreading performance testing
 ### DO NOT RUN THE FOLLOWING WITHOUT ADJUSTING MAX NUMBER OF THREADS FOR YOUR SYSTEM
 Generate log files:
 ```bash
@@ -132,13 +132,13 @@ Print .md table:
 ./scripts/parse_bench.py
 ```
 ### Mini-Training Performance (10k MNIST samples, 2×256,64 MLP, 10 epochs)
-| Threads | Total time (s) | Speedup | Efficiency (%) | Best Val (%) |
-|--------:|---------------:|--------:|---------------:|-------------:|
-| 1 | 35.80 | 1.00 | 100.0 | 96.60 |
-| 2 | 21.10 | 1.70 | 84.8 | 96.60 |
-| 4 | 12.80 | 2.80 | 69.9 | 96.60 |
-| 8 | 9.60 | 3.73 | 46.6 | 96.60 |
-| 16 | 18.00 | 1.99 | 12.4 | 96.60 |
+| Threads | Total time (s) | Speedup | Best Val (%) |
+|--------:|---------------:|--------:|-------------:|
+| 1 | 35.80 | 1.00 | 96.60 |
+| 2 | 21.10 | 1.70 | 96.60 |
+| 4 | 12.80 | 2.80 | 96.60 |
+| 8 | 9.60 | 3.73 | 96.60 |
+| 16 | 18.00 | 1.99 | 96.60 |
 
 The helper script `scripts/plot_results.py` can visualize training logs.
 ```bash

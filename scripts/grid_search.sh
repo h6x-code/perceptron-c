@@ -15,34 +15,27 @@ LBL_TR="data/MNIST/raw/train-labels-idx1-ubyte"
 IMG_TE="data/MNIST/raw/t10k-images-idx3-ubyte"
 LBL_TE="data/MNIST/raw/t10k-labels-idx1-ubyte"
 
-# small subset for iteration; tune as needed
-LIMIT_TR=${LIMIT_TR:-60000}
+# subset for iteration; tune as needed; max 60000 (full MNIST)
+LIMIT_TR=${LIMIT_TR:-10000}
 VAL_FRAC=${VAL_FRAC:-0.1}
 
 # ---------- sweeps ----------
-THREADS_LIST=(${THREADS_LIST:-8})
+THREADS_LIST=(8)
 
 MODEL_LIST=(
   "1  --units 64"
   "1  --units 128"
   "1  --units 256"
-  "1  --units 512"
-  "2  --units 64,64"
-  "2  --units 128,64"
-  "2  --units 256,64"
-  "2  --units 512,64"
-  "2  --units 256,128"
-  "2  --units 512,128"
 )
 
-BATCH_LIST=(${BATCH_LIST:-128})
-LR_LIST=(0.05 0.01)
-MOM_LIST=(0.9 0.95)
-DECAY_LIST=(0.95 0.99)
-STEP_LIST=(5 10)
+BATCH_LIST=(128 256 512)
+LR_LIST=(0.1)
+MOM_LIST=(0.9 0.91 0.92 0.93 0.94)
+DECAY_LIST=(0.98 0.985 0.99)
+STEP_LIST=(4)
 
 
-EPOCHS=${EPOCHS:-40}
+EPOCHS=${EPOCHS:-60}
 SEED=${SEED:-1337}
 PATIENCE=${PATIENCE:-10}
 
@@ -106,8 +99,35 @@ parse_train_log () {
 
 parse_eval_log () {
   local log="$1"
-  grep -Eo '\[eval\] acc=[0-9.]+%' "$log" | tail -n1 | sed 's/\[eval\] acc=//; s/%//' || true
+  local acc=""
+
+  # 1) Canonical: "[eval] acc=98.12%"
+  acc="$(grep -Eo '\[eval\][^%]*acc=[0-9.]+%' "$log" 2>/dev/null | tail -n1 | sed -E 's/.*acc=([0-9.]+)%.*/\1/')" || true
+
+  # 2) Fallbacks that might appear in other builds:
+  #    "acc=98.12%" anywhere, but prefer lines containing eval/test/accuracy
+  if [[ -z "$acc" ]]; then
+    acc="$(grep -Ei 'eval|test|accuracy' "$log" 2>/dev/null \
+        | grep -Eo 'acc(uracy)?=[0-9.]+%' \
+        | tail -n1 | sed -E 's/.*=([0-9.]+)%.*/\1/')" || true
+  fi
+
+  # 3) Another fallback used in some logs: "test=98.12%"
+  if [[ -z "$acc" ]]; then
+    acc="$(grep -Eo 'test=[0-9.]+%' "$log" 2>/dev/null | tail -n1 | sed -E 's/test=([0-9.]+)%.*/\1/')" || true
+  fi
+
+  # 4) Last resort: any percentage on a line with "eval" or "test"
+  if [[ -z "$acc" ]]; then
+    acc="$(grep -Ei 'eval|test' "$log" 2>/dev/null \
+        | grep -Eo '[0-9]+\.[0-9]+%' \
+        | tail -n1 | sed -E 's/([0-9.]+)%.*/\1/')" || true
+  fi
+
+  [[ -n "$acc" ]] && echo "$acc" || echo "NA"
 }
+
+
 
 # ---------- main loops ----------
 i=0
