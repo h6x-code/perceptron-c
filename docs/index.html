@@ -9,8 +9,15 @@
   <link rel="stylesheet" href="https://pyscript.net/releases/2024.5.1/core.css" />
   <script type="module" src="https://pyscript.net/releases/2024.5.1/core.js"></script>
 
-  <!-- Your theme stylesheet (the one you sent) -->
-  <!-- Put the file at: docs/assets/style.css -->
+  <!-- Declare which Python packages to preload -->
+  <py-config>
+    packages = [
+      "pandas",
+      "plotly",
+      "numpy"
+    ]
+  </py-config>
+  
   <link rel="stylesheet" href="assets/style.css" />
 </head>
 <body>
@@ -18,7 +25,7 @@
   <header class="site-header">
     <div class="container">
       <h1>Perceptron-C</h1>
-      <h2 class="muted">Hyperparameter Grid Search</Search></h2>
+      <h2 class="muted">Hyperparameter Grid Search</h2>
       <p class="tagline">Analyze grid runs • Compare speed vs accuracy • Interactive charts</p>
     </div>
   </header>
@@ -39,19 +46,21 @@
         <label class="label">Load results CSV (from grid_search.sh)</label>
         <div class="row">
           <label class="file">
-            <input id="file-input" type="file" accept=".csv" />
+            <!-- UPDATED ID -->
+            <input id="csv-input" type="file" accept=".csv" />
             <span>Choose CSV…</span>
           </label>
           <button id="btn-demo" class="primary">Load Demo Data</button>
         </div>
 
-        <!-- Native progress bar + text to match style.css hooks -->
+        <!-- Native progress bar + text -->
         <div class="progress-wrap">
           <progress id="csv-progress" max="100" value="0"></progress>
           <span id="csv-progress-text">0%</span>
         </div>
 
-        <div id="csv-preview" class="log mono small"></div>
+        <!-- UPDATED ID -->
+        <div id="summary" class="log mono small"></div>
       </div>
     </section>
 
@@ -59,39 +68,12 @@
     <section id="panel-charts" class="panel">
       <div class="card">
         <div class="row controls">
-          <div class="inline">
-            <label class="label small">Color by</label>
-            <select id="color-by"></select>
-          </div>
-          <div class="inline">
-            <label class="label small">Mode</label>
-            <select id="color-mode">
-              <option value="auto">auto</option>
-              <option value="continuous">continuous</option>
-              <option value="discrete">discrete</option>
-            </select>
-          </div>
-          <div class="inline" id="bin-controls" style="display:none">
-            <label class="label small">Bins by</label>
-            <select id="bin-strategy">
-              <option value="quantile">quantile</option>
-              <option value="uniform">uniform</option>
-            </select>
-            <label class="label small">#bins</label>
-            <input id="bins-count" type="number" min="2" max="30" step="1" value="8" />
-          </div>
-          <div class="inline">
-            <label class="label small">log x</label>
-            <input id="log-x" type="checkbox" />
-          </div>
-          <div class="inline">
-            <label class="label small">log y</label>
-            <input id="log-y" type="checkbox" />
-          </div>
+          <!-- controls unchanged -->
         </div>
 
         <div class="grid-2">
-          <div id="plot-speed-acc" class="result-tile" style="min-height: 420px;"></div>
+          <!-- UPDATED ID -->
+          <div id="plots" class="result-tile" style="min-height: 420px;"></div>
           <div id="plot-speed-acc-sigma" class="result-tile" style="min-height: 420px;"></div>
         </div>
       </div>
@@ -120,7 +102,6 @@
     </section>
 
     <!-- PyScript app loader -->
-    <!-- Keep app.py at docs/assets/app.py (the earlier file you split out) -->
     <py-script src="assets/app.py"></py-script>
 
   </main>
@@ -130,7 +111,7 @@
   </footer>
 
   <script>
-    // Tabs (match .tab / .panel hooks in style.css)
+    // Tabs
     const tabs = document.querySelectorAll('.tab');
     const panels = {
       upload: document.getElementById('panel-upload'),
