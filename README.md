@@ -1,4 +1,4 @@
-# perceptron-c
+# Perceptron-C (ML Sandbox)
 
 A modular multi-layer perceptron (MLP) written in C.  
 Supports training on MNIST data, inference on CSV input, and multi-threaded training.
