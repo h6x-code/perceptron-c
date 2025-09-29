@@ -88,7 +88,7 @@ Download MNIST (not included in repo), adjust hyperparameters for your experimen
   --lr 0.1 --momentum 0.92 \
   --lr-decay 0.98 --lr-step 4 --patience 10 \
   --seed 1337 \
-  --out data/out/mnist-2layer.bin
+  --out data/out/model.bin
 ```
 
 ---
@@ -96,7 +96,7 @@ Download MNIST (not included in repo), adjust hyperparameters for your experimen
 ## Run prediction
 ```bash
 ./perceptron predict \
-  --model data/out/mnist-2layer.bin \
+  --model data/out/model.bin \
   --input csv:test.csv --csv-has-header
 ```
 
