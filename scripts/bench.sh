@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-for t in 1 2 4 8 16; do
+for t in 1 2 4 8 16 32; do
   ./perceptron train \
     --dataset mnist \
     --mnist-images data/MNIST/raw/train-images-idx3-ubyte \

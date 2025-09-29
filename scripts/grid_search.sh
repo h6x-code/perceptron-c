@@ -26,13 +26,18 @@ MODEL_LIST=(
   "1  --units 64"
   "1  --units 128"
   "1  --units 256"
+  "2  --units 64,32"
+  "2  --units 128,32"
+  "2  --units 256,32"
+  "2  --units 128,64"
+  "2  --units 256,64"
 )
 
-BATCH_LIST=(128 256 512)
-LR_LIST=(0.1)
-MOM_LIST=(0.9 0.91 0.92 0.93 0.94)
-DECAY_LIST=(0.98 0.985 0.99)
-STEP_LIST=(4)
+BATCH_LIST=(${BATCH_LIST:-256})
+LR_LIST=(${LR_LIST:-0.08 0.1 0.12})
+MOM_LIST=(${MOM_LIST:-0.9 0.91 0.92 0.93 0.94})
+DECAY_LIST=(${DECAY_LIST:-0.98 0.985 0.99})
+STEP_LIST=(${STEP_LIST:-4})
 
 
 EPOCHS=${EPOCHS:-60}
