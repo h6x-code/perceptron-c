@@ -103,8 +103,8 @@ runs/grid_YYYYmmdd-HHMMSS/
 Richer plots directly from a grid's `results.csv`.
 ```bash
 # One-stop visualization folder
-python3 scripts/visualize_grid.py runs/grid_YYYYmmdd-HHMMSS/results.csv \
-  --out runs/grid_YYYYmmdd-HHMMSS/docs
+python3 scripts/visualize_grid.py runs/grid_20250929-142217/results.csv \
+  --out runs/grid_20250929-142217/docs
 
 # Customize the title, show interactive windows too
 python3 scripts/visualize_grid.py runs/grid_mini/results.csv \
@@ -112,7 +112,7 @@ python3 scripts/visualize_grid.py runs/grid_mini/results.csv \
 ```
 
 ### `Hyperparameter-Grid-Search-Analysis.ipynb`
-Copy notebook to root of the grid
+After running `visualize_grid.py`, copy notebook to root of the grid
 ```bash
 cp scripts/Hyperparameter-Grid-Search-Analysis.ipynb \
     runs/grid_YYYYmmdd-HHMMSS/Hyperparameter-Grid-Search-Analysis.ipynb

@@ -82,11 +82,11 @@ Download MNIST (not included in repo), adjust hyperparameters for your experimen
   --mnist-images data/MNIST/raw/train-images-idx3-ubyte \
   --mnist-labels data/MNIST/raw/train-labels-idx1-ubyte \
   --limit 10000 --val 0.1 \
-  --layers 2 --units 256,32 \
+  --layers 2 --units 64,32 \
   --epochs 60 \
-  --batch 256 --threads 8 \
-  --lr 0.1 --momentum 0.92 \
-  --lr-decay 0.98 --lr-step 4 --patience 10 \
+  --batch 128 --threads 8 \
+  --lr 0.1 --momentum 0.95 \
+  --lr-decay 0.95 --lr-step 4 --patience 10 \
   --seed 1337 \
   --out data/out/model.bin
 ```
