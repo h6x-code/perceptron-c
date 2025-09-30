@@ -213,7 +213,10 @@ button:disabled { opacity: 0.6; cursor: not-allowed; }
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.tbl-compact th, .tbl-compact td { padding: 4px 6px; font-size: 12px; }
+.tbl-compact th, .tbl-compact td { 
+  padding: 4px 6px; 
+  font-size: 12px; 
+}
 
 .tbl thead th {
   position: sticky;
@@ -221,6 +224,13 @@ button:disabled { opacity: 0.6; cursor: not-allowed; }
   background: var(--panel);
   z-index: 2;
 }
-.tbl tbody tr:nth-child(even) { background-color: rgba(255, 255, 255, 0.04); }
+.tbl tbody tr:nth-child(even) { 
+  background-color: rgba(255, 255, 255, 0.04); 
+}
+
+.tbl tbody tr:hover {
+  background-color: rgba(123, 240, 181, 0.08); /* faint green accent */
+  transition: background-color 0.15s ease-in-out;
+}
 
 .tiny { font-size: 11px; }
