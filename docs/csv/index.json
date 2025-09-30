@@ -1,5 +1,6 @@
 {
   "files": [
+    { "name": "Mini Training Set Results", "path": "csv/mini_mnist_results.csv"},
     { "name": "Full Training Set Results", "path": "csv/full_mnist_results.csv" },
     { "name": "Multithreading Results", "path": "csv/multithreading_results.csv" }
   ]
